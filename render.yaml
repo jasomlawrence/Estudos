@@ -1,0 +1,21 @@
+# Publicação com 1 clique no Render (render.com): New → Blueprint → escolha este repositório
+services:
+  - type: web
+    name: kanban-producao
+    runtime: node
+    rootDir: kanban-producao
+    plan: starter            # o disco persistente exige um plano pago
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/auth/me
+    disk:
+      name: dados
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATA_DIR
+        value: /data
+      - key: TZ
+        value: America/Sao_Paulo

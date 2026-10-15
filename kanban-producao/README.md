@@ -46,6 +46,8 @@ Os dados ficam na pasta `data/` (banco SQLite + anexos). **Faça backup dessa pa
 
 O Shopify precisa enviar os pedidos para um endereço público com **https**. Opções simples:
 
+- **Render (mais fácil):** crie uma conta em [render.com](https://render.com), clique em *New → Blueprint* e escolha este repositório. O arquivo `render.yaml` na raiz já configura tudo (servidor, disco de 1 GB para banco e anexos, fuso horário). O Render gera um endereço `https://….onrender.com`; use-o no Shopify e em Configurações → Notificações. O disco persistente exige o plano pago *Starter* (sem disco, os dados se perdem a cada atualização).
+
 - **Docker** (VPS, Railway, Render, Fly.io…): `docker build -t kanban . && docker run -p 3000:3000 -v kanban-data:/data kanban`. Use um disco/volume persistente em `/data`.
 - **VPS com Node**: `npm install --omit=dev && npm start` atrás de um Nginx/Caddy com HTTPS.
 
