@@ -1,5 +1,5 @@
 // Inicialização: login, barra superior, tempo real, notificações
-import { h, $, clear, avatar, timeAgo, debounce } from './util.js';
+import { h, $, clear, avatar, timeAgo, debounce, icon } from './util.js';
 import { get, post, patch, attempt, popover, toast } from './api.js';
 import { state, isAdmin } from './state.js';
 import { loadBoard, reloadSoon, enableDragScroll } from './board.js';
@@ -29,7 +29,7 @@ function authScreen(mode) {
       location.reload();
     } catch (err) { error.textContent = err.message; }
   } },
-  h('div', { class: 'logo' }, '💍'),
+  h('div', { class: 'logo' }, icon('gem', 30)),
   h('h1', {}, mode === 'setup' ? 'Configuração inicial' : 'Produção de Anéis'),
   mode === 'setup' ? h('p', { class: 'muted' }, 'Crie a conta de administrador. Um quadro de produção de anéis de noivado será criado para você.') : null,
   mode === 'setup' ? name : null, email, password, error,
@@ -58,16 +58,18 @@ function renderShell() {
     state.columns = [];
     loadBoard({ keepScroll: false });
   } }, state.boards.map((b) => h('option', { value: b.id, selected: b.id === state.boardId }, b.name)));
-  const search = h('input', { type: 'search', class: 'search', placeholder: '🔍 Buscar cards (título, cliente, pedido…)',
+  const searchInput = h('input', { type: 'search', placeholder: 'Buscar cards (título, cliente, pedido…)', 'aria-label': 'Buscar cards',
     oninput: debounce((e) => { state.search = e.target.value.trim(); state.columns = []; loadBoard({ keepScroll: false }); }, 300) });
-  const archivedBtn = h('button', { class: 'top-btn', title: 'Mostrar cards arquivados', onclick: () => {
+  const search = h('label', { class: 'search' }, icon('search', 16), searchInput);
+  const topBtn = (name, label, title, onclick) => h('button', { class: 'top-btn', title, onclick }, icon(name, 17), h('span', { class: 'lbl' }, label));
+  const archivedBtn = topBtn('archive', 'Arquivados', 'Mostrar cards arquivados', () => {
     state.archived = !state.archived;
     archivedBtn.classList.toggle('active', state.archived);
     document.body.classList.toggle('show-archived', state.archived);
     state.columns = [];
     loadBoard({ keepScroll: false });
-  } }, '🗄 Arquivados');
-  const bell = h('button', { class: 'top-btn bell', title: 'Notificações', onclick: (e) => openNotifications(e.currentTarget) }, '🔔', h('span', { class: 'badge-count', id: 'notif-count', hidden: true }));
+  });
+  const bell = h('button', { class: 'top-btn bell', title: 'Notificações', onclick: (e) => openNotifications(e.currentTarget) }, icon('bell', 17), h('span', { class: 'badge-count', id: 'notif-count', hidden: true }));
   const userBtn = h('button', { class: 'top-btn user', onclick: (e) => {
     const pop = popover(e.currentTarget, h('div', { class: 'menu' },
       h('div', { class: 'menu-title' }, `${state.user.name} (${({ admin: 'administrador', member: 'editor', viewer: 'somente leitura' })[state.user.role]})`),
@@ -77,17 +79,17 @@ function renderShell() {
 
   clear(document.body,
     h('header', { class: 'topbar' },
-      h('span', { class: 'logo' }, '💍'),
+      h('span', { class: 'logo' }, icon('gem', 20)),
       state.boards.length > 1 ? boardSelect : null,
       h('input', { id: 'board-name', class: 'board-name', readOnly: !isAdmin(), title: 'Nome do quadro',
         onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); },
         onchange: (e) => attempt(() => patch(`/boards/${state.boardId}`, { name: e.target.value })) }),
       search,
       h('div', { class: 'top-actions' },
-        h('button', { class: 'top-btn', onclick: () => openMetrics(openCard), title: 'Tempo de produção' }, '⏱ Produção'),
-        h('button', { class: 'top-btn', onclick: () => openActivity(openCard), title: 'Histórico de alterações' }, '📜 Atividade'),
+        topBtn('clock', 'Produção', 'Tempo de produção', () => openMetrics(openCard)),
+        topBtn('history', 'Atividade', 'Histórico de alterações', () => openActivity(openCard)),
         archivedBtn,
-        h('button', { class: 'top-btn', onclick: () => openSettings(), title: 'Configurações' }, '⚙ Configurações'),
+        topBtn('settings', 'Configurações', 'Configurações', () => openSettings()),
         bell, userBtn)),
     h('main', { id: 'board', class: 'board' }));
   enableDragScroll($('#board'));

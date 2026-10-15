@@ -164,6 +164,29 @@ CREATE TABLE IF NOT EXISTS notification_log (
 );
 `);
 
+// Visual pastel (v2): troca as cores padrão antigas pelas novas, sem tocar nas cores escolhidas pelo usuário
+const DEFAULT_BACKGROUND = 'g:aurora';
+const DEFAULT_COLUMN_COLOR = '#eef1f8';
+const COLOR_UPGRADE = {
+  '#1d2b3a': DEFAULT_BACKGROUND, '#ebecf0': DEFAULT_COLUMN_COLOR,
+  '#cfe2ff': '#cde7ff', '#e2d9f3': '#dcd3ff', '#ffe5d0': '#ffe5b4', '#fff3cd': '#fff3b0', '#d1ecf1': '#c7f0ec', '#f8d7da': '#ffd6e0', '#d1e7dd': '#d4f8d4',
+  '#e5484d': '#ff8f9e', '#d4a72c': '#ffd166', '#a0aec0': '#cbd5e1', '#7c66dc': '#b8a6ff',
+};
+const OPTION_UPGRADE = { '#d4a72c': '#ffe08a', '#a0aec0': '#e2e8f0', '#e8a598': '#ffd0c2', '#8e9aaf': '#d5dcea' };
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'migration:pastel'").get()) {
+  db.exec('BEGIN');
+  for (const [from, to] of Object.entries(COLOR_UPGRADE)) {
+    db.prepare('UPDATE boards SET background = ? WHERE lower(background) = ?').run(to, from);
+    db.prepare('UPDATE columns SET color = ? WHERE lower(color) = ?').run(to, from);
+    db.prepare('UPDATE labels SET color = ? WHERE lower(color) = ?').run(to, from);
+  }
+  for (const [from, to] of Object.entries(OPTION_UPGRADE)) {
+    db.prepare('UPDATE field_defs SET options = replace(options, ?, ?)').run(`"color":"${from}"`, `"color":"${to}"`);
+  }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('migration:pastel', 'true')").run();
+  db.exec('COMMIT');
+}
+
 function transaction(fn) {
   return (...args) => {
     db.exec('BEGIN');
@@ -197,4 +220,4 @@ function setSetting(key, value) {
 
 const now = () => new Date().toISOString();
 
-module.exports = { db, q, transaction, getSetting, setSetting, now, DATA_DIR, UPLOAD_DIR };
+module.exports = { db, q, transaction, getSetting, setSetting, now, DATA_DIR, UPLOAD_DIR, DEFAULT_BACKGROUND, DEFAULT_COLUMN_COLOR };

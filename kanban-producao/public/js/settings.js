@@ -1,5 +1,5 @@
 // Configurações: quadro, campos, etiquetas, cronômetro, Shopify, Google Planilhas, notificações, usuários
-import { h, clear, textColorFor, colorPicker, PALETTE, copyText, avatar } from './util.js';
+import { h, clear, textColorFor, colorPicker, PALETTE, copyText, avatar, BACKGROUNDS, backgroundCss, icon } from './util.js';
 import { get, post, patch, put, del, attempt, modal, confirmDialog, toast } from './api.js';
 import { state, isAdmin } from './state.js';
 import { loadBoard } from './board.js';
@@ -38,7 +38,7 @@ const PANELS = {
     clear(panel,
       h('h3', {}, 'Quadro atual'),
       h('label', { class: 'form-row' }, 'Nome', name),
-      h('div', { class: 'form-row' }, 'Cor de fundo', colorPicker(bg, (c) => { bg = c || '#1d2b3a'; document.documentElement.style.setProperty('--board-bg', bg); }, { allowNone: false })),
+      h('div', { class: 'form-row' }, 'Fundo do quadro', backgroundPicker(bg, (b) => { bg = b; document.documentElement.style.setProperty('--board-bg', backgroundCss(b)); })),
       h('button', { class: 'btn primary', onclick: () => attempt(() => patch(`/boards/${state.boardId}`, { name: name.value, background: bg }), 'Quadro salvo') }, 'Salvar'),
       isAdmin() ? [
         h('h3', {}, 'Outros quadros'),
@@ -50,7 +50,7 @@ const PANELS = {
         h('button', { class: 'btn', onclick: async () => {
           const r = await attempt(() => post('/boards', { name: 'Novo quadro' }));
           if (r) { localStorage.setItem('boardId', r.id); location.reload(); }
-        } }, '＋ Criar novo quadro'),
+        } }, '+ Criar novo quadro'),
       ] : null);
   },
 
@@ -70,9 +70,9 @@ const PANELS = {
       h('div', { class: 'row add-field' }, newName, newType,
         h('button', { class: 'btn primary', onclick: async () => {
           if (!newName.value.trim()) return toast('Dê um nome ao campo.', 'error');
-          const opts = ['select', 'multiselect'].includes(newType.value) ? [{ label: 'Opção 1', color: PALETTE[10] }] : [];
+          const opts = ['select', 'multiselect'].includes(newType.value) ? [{ label: 'Opção 1', color: PALETTE[0] }] : [];
           if (await attempt(() => post(`/boards/${state.boardId}/fields`, { name: newName.value, type: newType.value, options: opts, show_on_card: false }), 'Campo criado')) redraw();
-        } }, '＋ Adicionar campo')));
+        } }, '+ Adicionar campo')));
   },
 
   // ---------------- Etiquetas ----------------
@@ -81,7 +81,7 @@ const PANELS = {
     state.labels = data.labels;
     const redraw = () => PANELS.labels(panel);
     const row = (l) => {
-      let color = l?.color || PALETTE[0];
+      let color = l?.color || PALETTE[10];
       const name = h('input', { value: l?.name || '', placeholder: 'Nome da etiqueta' });
       const sw = h('button', { class: 'swatch big', style: { background: color }, onclick: (e) => {
         const p = colorPicker(color, (c) => { color = c; sw.style.background = c; p.remove(); }, { allowNone: false });
@@ -234,7 +234,7 @@ const PANELS = {
         k === 'id' ? h('small', { class: 'muted' }, ' (obrigatório, coluna A)') : [
           h('button', { class: 'icon-btn', title: 'Subir', disabled: i <= 1, onclick: () => { [selected[i - 1], selected[i]] = [selected[i], selected[i - 1]]; drawCols(); } }, '↑'),
           h('button', { class: 'icon-btn', title: 'Descer', disabled: i === selected.length - 1, onclick: () => { [selected[i + 1], selected[i]] = [selected[i], selected[i + 1]]; drawCols(); } }, '↓'),
-          h('button', { class: 'icon-btn', title: 'Remover', onclick: () => { selected = selected.filter((x) => x !== k); drawCols(); } }, '✕'),
+          h('button', { class: 'icon-btn', title: 'Remover', onclick: () => { selected = selected.filter((x) => x !== k); drawCols(); } }, icon('x')),
         ]))),
       h('div', { class: 'muted small' }, 'Disponíveis (clique para adicionar):'),
       h('div', { class: 'row wrap' }, options.filter((o) => !selected.includes(o.key)).map((o) => h('button', { class: 'chip toggle', onclick: () => { selected.push(o.key); drawCols(); } }, `＋ ${o.label}`))));
@@ -369,6 +369,19 @@ const PANELS = {
   },
 };
 
+function backgroundPicker(current, onPick) {
+  const wrap = h('div', { class: 'bg-picker' });
+  const draw = (sel) => clear(wrap,
+    Object.entries(BACKGROUNDS).map(([key, b]) => h('button', {
+      type: 'button', class: `bg-option${key === sel ? ' active' : ''}`, title: b.name, style: { background: b.css },
+      onclick: () => { onPick(key); draw(key); },
+    }, h('span', {}, b.name))),
+    h('div', { class: 'muted small' }, 'Ou uma cor sólida:'),
+    colorPicker(/^#/.test(sel) ? sel : null, (c) => { if (c) { onPick(c); draw(c); } }, { allowNone: false }));
+  draw(current);
+  return wrap;
+}
+
 function fieldDefEditor(f, index, redraw) {
   const name = h('input', { value: f.name });
   const show = h('input', { type: 'checkbox', checked: f.show_on_card });
@@ -380,8 +393,8 @@ function fieldDefEditor(f, index, redraw) {
       e.currentTarget.parentElement.after(p);
     } });
     return h('div', { class: 'row' }, sw, h('input', { value: o.label, oninput: (e) => { o.label = e.target.value; } }),
-      h('button', { class: 'icon-btn', title: 'Remover opção', onclick: () => { options.splice(i, 1); drawOptions(); } }, '✕'));
-  }), h('button', { class: 'btn small', onclick: () => { options.push({ label: `Opção ${options.length + 1}`, color: PALETTE[(10 + options.length) % PALETTE.length] }); drawOptions(); } }, '＋ Opção'));
+      h('button', { class: 'icon-btn', title: 'Remover opção', onclick: () => { options.splice(i, 1); drawOptions(); } }, icon('x')));
+  }), h('button', { class: 'btn small', onclick: () => { options.push({ label: `Opção ${options.length + 1}`, color: PALETTE[options.length % 9] }); drawOptions(); } }, '+ Opção'));
   if (['select', 'multiselect'].includes(f.type)) drawOptions();
   const move = async (dir) => {
     const other = state.fields[index + dir];

@@ -1,5 +1,5 @@
 // Quadro Kanban: colunas, cards, arrastar e soltar, rolagem infinita
-import { h, $, $$, clear, textColorFor, fmtShortDate, fmtDuration, avatar, fieldText, colorPicker } from './util.js';
+import { h, $, $$, clear, textColorFor, fmtShortDate, fmtDuration, avatar, fieldText, colorPicker, icon, backgroundCss } from './util.js';
 import { get, post, patch, del, attempt, popover, confirmDialog, toast } from './api.js';
 import { state, canEdit, userById, labelById, columnById } from './state.js';
 import { openCard } from './card.js';
@@ -31,7 +31,7 @@ function renderBoard(keepScroll) {
   const colScroll = Object.fromEntries($$('.cards', root).map((el) => [el.dataset.columnId, el.scrollTop]));
   sortables.forEach((s) => s.destroy());
   sortables = [];
-  document.documentElement.style.setProperty('--board-bg', state.board.background || '#1d2b3a');
+  document.documentElement.style.setProperty('--board-bg', backgroundCss(state.board.background));
   $('#board-name').value = state.board.name;
 
   const list = h('div', { class: 'board-columns' });
@@ -47,18 +47,19 @@ function renderBoard(keepScroll) {
 
 // ---------------- Colunas ----------------
 function columnElement(col) {
-  const fg = textColorFor(col.color) || '#172b4d';
+  const fg = textColorFor(col.color) || '#2a2540';
   if (col.collapsed) {
     return h('div', { class: 'column collapsed', dataset: { columnId: col.id }, style: { background: col.color, color: fg }, title: 'Clique para expandir', onclick: () => toggleCollapse(col) },
       h('span', { class: 'collapsed-count' }, String(col.total)),
       h('span', { class: 'collapsed-name' }, col.name),
-      h('span', { class: 'collapsed-icon' }, '⇔'));
+      h('span', { class: 'collapsed-icon' }, icon('expand', 16)));
   }
   const cards = h('div', { class: 'cards', dataset: { columnId: col.id } }, col.cards.map(cardElement));
   if (col.cards.length < col.total) cards.append(h('div', { class: 'sentinel', dataset: { columnId: col.id } }, 'Carregando…'));
   const cycle = cycleTag(col);
   return h('section', { class: 'column', dataset: { columnId: col.id }, style: { '--col': col.color, '--col-fg': fg } },
     h('header', { class: 'column-head' },
+      h('span', { class: 'column-dot' }),
       h('input', {
         class: 'column-title', value: col.name, readOnly: !canEdit(), 'aria-label': 'Nome da coluna',
         onkeydown: (e) => { if (e.key === 'Enter') e.target.blur(); },
@@ -66,8 +67,8 @@ function columnElement(col) {
       }),
       h('span', { class: 'count', title: 'Quantidade de cards' }, String(col.total)),
       cycle,
-      h('button', { class: 'icon-btn', title: 'Minimizar coluna', onclick: () => toggleCollapse(col) }, '⇤'),
-      canEdit() ? h('button', { class: 'icon-btn', title: 'Mais opções', onclick: (e) => columnMenu(e.currentTarget, col) }, '⋯') : null),
+      h('button', { class: 'icon-btn', title: 'Minimizar coluna', onclick: () => toggleCollapse(col) }, icon('collapse', 16)),
+      canEdit() ? h('button', { class: 'icon-btn', title: 'Mais opções', onclick: (e) => columnMenu(e.currentTarget, col) }, icon('more', 18)) : null),
     cards,
     canEdit() && !state.archived ? addCardElement(col) : null);
 }
@@ -76,8 +77,8 @@ function cycleTag(col) {
   const cols = [...state.columns].sort((a, b) => a.position - b.position);
   const start = cols.find((c) => c.id === state.board.cycle_start_column_id) || cols[0];
   const end = cols.find((c) => c.id === state.board.cycle_end_column_id) || cols[cols.length - 1];
-  if (col.id === start?.id) return h('span', { class: 'cycle-tag', title: 'O cronômetro de produção começa nesta coluna' }, '▶');
-  if (col.id === end?.id) return h('span', { class: 'cycle-tag', title: 'O cronômetro de produção para nesta coluna' }, '■');
+  if (col.id === start?.id) return h('span', { class: 'cycle-tag', title: 'O cronômetro de produção começa nesta coluna' }, icon('play', 11), 'início');
+  if (col.id === end?.id) return h('span', { class: 'cycle-tag', title: 'O cronômetro de produção para nesta coluna' }, icon('flag', 11), 'fim');
   return null;
 }
 
@@ -145,18 +146,18 @@ function addColumnElement() {
     };
     clear(wrap, input, h('div', { class: 'row' },
       h('button', { class: 'btn primary', onclick: submit }, 'Adicionar coluna'),
-      h('button', { class: 'icon-btn', onclick: () => clear(wrap, button) }, '✕')));
+      h('button', { class: 'icon-btn', title: 'Cancelar', onclick: () => clear(wrap, button) }, icon('x'))));
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') clear(wrap, button); });
     input.focus();
   };
-  const button = h('button', { class: 'add-column-btn', onclick: showForm }, '＋ Adicionar coluna');
+  const button = h('button', { class: 'add-column-btn', onclick: showForm }, icon('plus', 16), 'Adicionar coluna');
   wrap.append(button);
   return wrap;
 }
 
 function addCardElement(col) {
   const wrap = h('div', { class: 'add-card' });
-  const button = h('button', { class: 'add-card-btn', onclick: () => showForm() }, '＋ Adicionar card');
+  const button = h('button', { class: 'add-card-btn', onclick: () => showForm() }, icon('plus', 16), 'Adicionar card');
   const showForm = () => {
     const input = h('textarea', { placeholder: 'Título do card (Enter para salvar)', rows: 2 });
     const submit = async () => {
@@ -175,7 +176,7 @@ function addCardElement(col) {
     });
     clear(wrap, input, h('div', { class: 'row' },
       h('button', { class: 'btn primary', onclick: submit }, 'Adicionar'),
-      h('button', { class: 'icon-btn', onclick: () => clear(wrap, button) }, '✕')));
+      h('button', { class: 'icon-btn', title: 'Cancelar', onclick: () => clear(wrap, button) }, icon('x'))));
     input.focus();
   };
   wrap.append(button);
@@ -188,7 +189,7 @@ export function cardElement(card) {
   const visibleFields = state.fields.filter((f) => f.show_on_card && card.fields[f.id] !== undefined && card.fields[f.id] !== null);
   const due = dueBadge(card);
   const timer = card.cycle_started_at ? h('span', { class: `badge ${card.cycle_ended_at ? 'done' : ''}`, title: card.cycle_ended_at ? 'Tempo total de produção' : 'Em produção há' },
-    '⏱ ', fmtDuration(Date.parse(card.cycle_ended_at || new Date().toISOString()) - Date.parse(card.cycle_started_at))) : null;
+    icon('clock', 13), fmtDuration(Date.parse(card.cycle_ended_at || new Date().toISOString()) - Date.parse(card.cycle_started_at))) : null;
   return h('article', {
     class: `card${card.color ? ' colored' : ''}`, dataset: { cardId: card.id }, tabIndex: 0,
     style: card.color ? { background: card.color, color: fg, '--card-fg': fg } : {},
@@ -202,9 +203,9 @@ export function cardElement(card) {
     visibleFields.length ? h('dl', { class: 'card-fields' }, visibleFields.map((f) => [h('dt', {}, f.name), h('dd', {}, fieldChip(f, card.fields[f.id]))])) : null,
     h('div', { class: 'card-badges' },
       due, timer,
-      card.source === 'shopify' ? h('span', { class: 'badge shopify', title: 'Pedido do Shopify' }, '🛍') : null,
-      card.description ? h('span', { class: 'badge', title: 'Tem descrição' }, '≡') : null,
-      card.attachment_count ? h('span', { class: 'badge', title: 'Anexos' }, '📎 ', String(card.attachment_count)) : null,
+      card.source === 'shopify' ? h('span', { class: 'badge shopify', title: 'Pedido do Shopify' }, icon('bag', 13)) : null,
+      card.description ? h('span', { class: 'badge', title: 'Tem descrição' }, icon('text', 13)) : null,
+      card.attachment_count ? h('span', { class: 'badge', title: 'Anexos' }, icon('clip', 13), String(card.attachment_count)) : null,
       card.members.length ? h('span', { class: 'card-members' }, card.members.map(userById).filter(Boolean).map((u) => avatar(u, 22))) : null)));
 }
 
@@ -224,7 +225,7 @@ export function dueBadge(card) {
   if (card.cycle_ended_at) { cls = 'done'; title = 'Concluído'; }
   else if (diff < 0) { cls = 'overdue'; title = 'Prazo vencido'; }
   else if (diff < 2 * 864e5) { cls = 'soon'; title = 'Prazo próximo'; }
-  return h('span', { class: `badge due ${cls}`, title }, '🕒 ', fmtShortDate(card.due_date));
+  return h('span', { class: `badge due ${cls}`, title }, icon('calendar', 13), fmtShortDate(card.due_date));
 }
 
 // ---------------- Arrastar e soltar ----------------
