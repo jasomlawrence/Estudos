@@ -1,0 +1,25 @@
+{
+  "id": 5123456789,
+  "name": "#1001",
+  "order_number": 1001,
+  "created_at": "2026-10-15T10:00:00-03:00",
+  "email": "maria@example.com",
+  "phone": null,
+  "note": "Entregar antes do pedido de casamento!",
+  "currency": "BRL",
+  "total_price": "8900.00",
+  "financial_status": "paid",
+  "customer": { "first_name": "Maria", "last_name": "Souza", "email": "maria@example.com", "phone": "+5511999998888" },
+  "shipping_address": { "name": "Maria Souza", "address1": "Rua das Flores, 100", "address2": "", "city": "São Paulo", "province_code": "SP", "zip": "01000-000", "country": "Brazil" },
+  "line_items": [
+    {
+      "id": 11111, "title": "Anel de Noivado Solitário", "variant_title": "Ouro amarelo 18k", "sku": "SOL-18K", "vendor": "Ateliê",
+      "quantity": 1, "price": "8500.00", "product_id": 777,
+      "properties": [{ "name": "Tamanho do aro", "value": "15" }, { "name": "Gravação", "value": "Para sempre" }]
+    },
+    {
+      "id": 22222, "title": "Caixa de presente", "variant_title": null, "sku": "BOX", "vendor": "Ateliê",
+      "quantity": 1, "price": "400.00", "product_id": 888, "properties": []
+    }
+  ]
+}

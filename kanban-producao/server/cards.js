@@ -1,0 +1,304 @@
+'use strict';
+// Regras de negócio de cards: criação, movimentação, edição, histórico
+const { q, transaction, now } = require('./db');
+const { bus, boardChanged } = require('./events');
+const { computeCycle, columnDurations } = require('./cycle');
+
+const FIELD_TYPES = ['text', 'textarea', 'number', 'currency', 'date', 'datetime', 'checkbox', 'select', 'multiselect', 'url', 'email', 'phone'];
+
+function logActivity(boardId, cardId, userId, action, details = {}) {
+  q.run('INSERT INTO activity (board_id, card_id, user_id, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    boardId, cardId, userId ?? null, action, JSON.stringify(details), now());
+}
+
+function parseJSON(s, fallback) { try { return JSON.parse(s); } catch { return fallback; } }
+
+function fieldDefs(boardId) {
+  return q.all('SELECT * FROM field_defs WHERE board_id = ? ORDER BY position', boardId)
+    .map((f) => ({ ...f, options: parseJSON(f.options, []), show_on_card: !!f.show_on_card }));
+}
+
+/** Normaliza o valor digitado conforme o tipo do campo. Retorna null para "vazio". */
+function normalizeValue(def, value) {
+  if (value === undefined || value === null || value === '') return null;
+  switch (def.type) {
+    case 'number':
+    case 'currency': {
+      const n = typeof value === 'number' ? value : Number(String(value).replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'));
+      return Number.isFinite(n) ? n : null;
+    }
+    case 'checkbox': return value === true || value === 'true' || value === 1 || value === '1';
+    case 'date': {
+      const s = String(value).slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+    }
+    case 'datetime': {
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? null : d.toISOString();
+    }
+    case 'select': {
+      const opt = def.options.find((o) => o.id === value || o.label === value);
+      return opt ? opt.id : null;
+    }
+    case 'multiselect': {
+      const arr = Array.isArray(value) ? value : String(value).split(',').map((s) => s.trim());
+      const ids = arr.map((v) => def.options.find((o) => o.id === v || o.label === v)?.id).filter(Boolean);
+      return ids.length ? [...new Set(ids)] : null;
+    }
+    default: return String(value);
+  }
+}
+
+/** Texto legível do valor (usado no histórico e na planilha). */
+function displayValue(def, value) {
+  if (value === null || value === undefined) return '';
+  switch (def.type) {
+    case 'checkbox': return value ? 'Sim' : 'Não';
+    case 'currency': return Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    case 'number': return String(value).replace('.', ',');
+    case 'date': { const [y, m, d] = value.split('-'); return `${d}/${m}/${y}`; }
+    case 'datetime': return new Date(value).toLocaleString('pt-BR', { timeZone: process.env.TZ || 'America/Sao_Paulo' });
+    case 'select': return def.options.find((o) => o.id === value)?.label ?? '';
+    case 'multiselect': return value.map((id) => def.options.find((o) => o.id === id)?.label).filter(Boolean).join(', ');
+    default: return String(value);
+  }
+}
+
+function boardColumns(boardId) {
+  return q.all('SELECT * FROM columns WHERE board_id = ? ORDER BY position', boardId);
+}
+
+function columnName(id) {
+  return q.get('SELECT name FROM columns WHERE id = ?', id)?.name ?? '(coluna removida)';
+}
+
+function applyCycle(card, toColumnId, at) {
+  const board = q.get('SELECT * FROM boards WHERE id = ?', card.board_id);
+  const next = computeCycle({
+    columns: boardColumns(card.board_id),
+    startId: board.cycle_start_column_id,
+    endId: board.cycle_end_column_id,
+    toColumnId,
+    card,
+    at,
+  });
+  q.run('UPDATE cards SET cycle_started_at = ?, cycle_ended_at = ? WHERE id = ?', next.cycle_started_at, next.cycle_ended_at, card.id);
+  return next;
+}
+
+function positionBetween(columnId, prevId, nextId, excludeId) {
+  const prev = prevId ? q.get('SELECT position FROM cards WHERE id = ? AND column_id = ?', prevId, columnId) : null;
+  const next = nextId ? q.get('SELECT position FROM cards WHERE id = ? AND column_id = ?', nextId, columnId) : null;
+  if (prev && next) {
+    if (next.position - prev.position < 1e-6) {
+      renumberColumn(columnId, excludeId);
+      return positionBetween(columnId, prevId, nextId, excludeId);
+    }
+    return (prev.position + next.position) / 2;
+  }
+  if (prev) return prev.position + 1024;
+  if (next) return next.position - 1024;
+  const max = q.get('SELECT MAX(position) AS p FROM cards WHERE column_id = ? AND id != ?', columnId, excludeId ?? 0).p;
+  return (max ?? 0) + 1024;
+}
+
+function renumberColumn(columnId, excludeId) {
+  const rows = q.all('SELECT id FROM cards WHERE column_id = ? AND id != ? ORDER BY position', columnId, excludeId ?? 0);
+  rows.forEach((r, i) => q.run('UPDATE cards SET position = ? WHERE id = ?', (i + 1) * 1024, r.id));
+}
+
+const setFieldValues = (card, values, userId, log = true) => {
+  const defs = fieldDefs(card.board_id);
+  const changes = [];
+  for (const [fieldId, raw] of Object.entries(values || {})) {
+    const def = defs.find((d) => d.id === Number(fieldId));
+    if (!def) continue;
+    const value = normalizeValue(def, raw);
+    const old = q.get('SELECT value FROM card_field_values WHERE card_id = ? AND field_id = ?', card.id, def.id);
+    const oldValue = old ? parseJSON(old.value, null) : null;
+    if (JSON.stringify(oldValue) === JSON.stringify(value)) continue;
+    if (value === null) q.run('DELETE FROM card_field_values WHERE card_id = ? AND field_id = ?', card.id, def.id);
+    else q.run(`INSERT INTO card_field_values (card_id, field_id, value) VALUES (?, ?, ?)
+                ON CONFLICT(card_id, field_id) DO UPDATE SET value = excluded.value`, card.id, def.id, JSON.stringify(value));
+    changes.push({ field: def.name, from: displayValue(def, oldValue), to: displayValue(def, value) });
+  }
+  if (log) for (const c of changes) logActivity(card.board_id, card.id, userId, 'card.field', c);
+  return changes;
+};
+
+const createCard = transaction((data, userId) => {
+  const column = q.get('SELECT * FROM columns WHERE id = ?', data.columnId);
+  if (!column) throw httpError(400, 'Coluna inválida.');
+  const at = now();
+  const position = data.top
+    ? (q.get('SELECT MIN(position) AS p FROM cards WHERE column_id = ?', column.id).p ?? 1024) - 1024
+    : positionBetween(column.id, null, null);
+  const info = q.run(`INSERT INTO cards (board_id, column_id, title, description, color, position, due_date, source, external_id, external_url, created_by, created_at, updated_at)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    column.board_id, column.id, String(data.title || 'Sem título').slice(0, 500), data.description || '', data.color || null, position,
+    data.dueDate || null, data.source || 'manual', data.externalId || null, data.externalUrl || null, userId ?? null, at, at);
+  const cardId = Number(info.lastInsertRowid);
+  const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
+  q.run('INSERT INTO card_movements (card_id, from_column_id, to_column_id, user_id, moved_at) VALUES (?, NULL, ?, ?, ?)', cardId, column.id, userId ?? null, at);
+  applyCycle(card, column.id, at);
+  setFieldValues(card, data.fields, userId, false);
+  for (const labelId of data.labels || []) q.run('INSERT OR IGNORE INTO card_labels (card_id, label_id) SELECT ?, id FROM labels WHERE id = ? AND board_id = ?', cardId, labelId, column.board_id);
+  logActivity(column.board_id, cardId, userId, 'card.created', { title: card.title, column: column.name, source: card.source });
+  afterChange(column.board_id, cardId, userId);
+  return cardId;
+});
+
+const moveCard = transaction((cardId, { columnId, prevId, nextId }, userId) => {
+  const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
+  if (!card) throw httpError(404, 'Card não encontrado.');
+  const target = q.get('SELECT * FROM columns WHERE id = ? AND board_id = ?', columnId, card.board_id);
+  if (!target) throw httpError(400, 'Coluna inválida.');
+  const position = positionBetween(target.id, prevId, nextId, card.id);
+  const at = now();
+  q.run('UPDATE cards SET column_id = ?, position = ?, updated_at = ? WHERE id = ?', target.id, position, at, card.id);
+  if (card.column_id !== target.id) {
+    q.run('INSERT INTO card_movements (card_id, from_column_id, to_column_id, user_id, moved_at) VALUES (?, ?, ?, ?, ?)', card.id, card.column_id, target.id, userId ?? null, at);
+    applyCycle(card, target.id, at);
+    logActivity(card.board_id, card.id, userId, 'card.moved', { from: columnName(card.column_id), to: target.name });
+  }
+  afterChange(card.board_id, card.id, userId);
+});
+
+const updateCard = transaction((cardId, patch, userId) => {
+  const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
+  if (!card) throw httpError(404, 'Card não encontrado.');
+  const simple = { title: 'título', description: 'descrição', color: 'cor', due_date: 'prazo de entrega', cover_attachment_id: 'capa', archived: 'arquivado' };
+  for (const [key, label] of Object.entries(simple)) {
+    if (!(key in patch)) continue;
+    let value = patch[key];
+    if (key === 'archived') value = value ? 1 : 0;
+    if (key === 'title') value = String(value || '').trim().slice(0, 500) || card.title;
+    if (key === 'due_date' && value) { const d = new Date(value); value = Number.isNaN(d.getTime()) ? null : d.toISOString(); }
+    if (value === '') value = null;
+    if (key === 'description' && value === null) value = '';
+    if (value === card[key]) continue;
+    q.run(`UPDATE cards SET ${key} = ? WHERE id = ?`, value, card.id);
+    if (key === 'due_date') q.run("DELETE FROM notification_log WHERE dedupe_key LIKE ?", `due:${card.id}:%`);
+    const details = { attribute: label };
+    if (key === 'title' || key === 'color') Object.assign(details, { from: card[key], to: value });
+    if (key === 'due_date') Object.assign(details, { from: card.due_date, to: value });
+    if (key === 'archived') details.to = value ? 'sim' : 'não';
+    logActivity(card.board_id, card.id, userId, 'card.updated', details);
+  }
+  if (Array.isArray(patch.labels)) {
+    const current = q.all('SELECT l.id, l.name, l.color FROM card_labels cl JOIN labels l ON l.id = cl.label_id WHERE cl.card_id = ?', card.id);
+    const wanted = new Set(patch.labels.map(Number));
+    for (const l of current) if (!wanted.has(l.id)) {
+      q.run('DELETE FROM card_labels WHERE card_id = ? AND label_id = ?', card.id, l.id);
+      logActivity(card.board_id, card.id, userId, 'card.label_removed', { label: l.name, color: l.color });
+    }
+    for (const id of wanted) if (!current.some((l) => l.id === id)) {
+      const l = q.get('SELECT * FROM labels WHERE id = ? AND board_id = ?', id, card.board_id);
+      if (!l) continue;
+      q.run('INSERT OR IGNORE INTO card_labels (card_id, label_id) VALUES (?, ?)', card.id, id);
+      logActivity(card.board_id, card.id, userId, 'card.label_added', { label: l.name, color: l.color });
+    }
+  }
+  if (Array.isArray(patch.members)) {
+    const current = q.all('SELECT u.id, u.name FROM card_members cm JOIN users u ON u.id = cm.user_id WHERE cm.card_id = ?', card.id);
+    const wanted = new Set(patch.members.map(Number));
+    for (const u of current) if (!wanted.has(u.id)) {
+      q.run('DELETE FROM card_members WHERE card_id = ? AND user_id = ?', card.id, u.id);
+      logActivity(card.board_id, card.id, userId, 'card.member_removed', { member: u.name });
+    }
+    for (const id of wanted) if (!current.some((u) => u.id === id)) {
+      const u = q.get('SELECT * FROM users WHERE id = ?', id);
+      if (!u) continue;
+      q.run('INSERT OR IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', card.id, id);
+      logActivity(card.board_id, card.id, userId, 'card.member_added', { member: u.name });
+    }
+  }
+  if (patch.fields) setFieldValues(card, patch.fields, userId);
+  q.run('UPDATE cards SET updated_at = ? WHERE id = ?', now(), card.id);
+  afterChange(card.board_id, card.id, userId);
+});
+
+function deleteCard(cardId, userId) {
+  const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
+  if (!card) throw httpError(404, 'Card não encontrado.');
+  const files = q.all('SELECT filename FROM attachments WHERE card_id = ?', card.id);
+  q.run('DELETE FROM cards WHERE id = ?', card.id);
+  logActivity(card.board_id, null, userId, 'card.deleted', { title: card.title, cardId: card.id });
+  bus.emit('card:deleted', { cardId: card.id, boardId: card.board_id });
+  boardChanged(card.board_id, userId, card.id);
+  return files.map((f) => f.filename);
+}
+
+function afterChange(boardId, cardId, userId) {
+  // Executa depois do COMMIT para que os ouvintes leiam o estado final
+  setImmediate(() => {
+    bus.emit('card:changed', { cardId, boardId });
+    boardChanged(boardId, userId, cardId);
+  });
+}
+
+/** Dados resumidos de vários cards, para exibir no quadro. */
+function serializeCards(rows) {
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.id);
+  const marks = ids.map(() => '?').join(',');
+  const labels = q.all(`SELECT card_id, label_id FROM card_labels WHERE card_id IN (${marks})`, ...ids);
+  const members = q.all(`SELECT card_id, user_id FROM card_members WHERE card_id IN (${marks})`, ...ids);
+  const values = q.all(`SELECT card_id, field_id, value FROM card_field_values WHERE card_id IN (${marks})`, ...ids);
+  const atts = q.all(`SELECT card_id, COUNT(*) AS n FROM attachments WHERE card_id IN (${marks}) GROUP BY card_id`, ...ids);
+  const covers = q.all(`SELECT a.id, a.filename, a.card_id FROM attachments a JOIN cards c ON c.cover_attachment_id = a.id WHERE c.id IN (${marks})`, ...ids);
+  return rows.map((r) => ({
+    id: r.id,
+    board_id: r.board_id,
+    column_id: r.column_id,
+    title: r.title,
+    description: r.description,
+    color: r.color,
+    position: r.position,
+    due_date: r.due_date,
+    source: r.source,
+    external_url: r.external_url,
+    archived: !!r.archived,
+    cycle_started_at: r.cycle_started_at,
+    cycle_ended_at: r.cycle_ended_at,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    cover: covers.find((c) => c.card_id === r.id) ? `/uploads/${covers.find((c) => c.card_id === r.id).filename}` : null,
+    cover_attachment_id: r.cover_attachment_id,
+    labels: labels.filter((l) => l.card_id === r.id).map((l) => l.label_id),
+    members: members.filter((m) => m.card_id === r.id).map((m) => m.user_id),
+    fields: Object.fromEntries(values.filter((v) => v.card_id === r.id).map((v) => [v.field_id, parseJSON(v.value, null)])),
+    attachment_count: atts.find((a) => a.card_id === r.id)?.n || 0,
+  }));
+}
+
+function cardDetail(cardId) {
+  const row = q.get('SELECT * FROM cards WHERE id = ?', cardId);
+  if (!row) throw httpError(404, 'Card não encontrado.');
+  const [card] = serializeCards([row]);
+  card.attachments = q.all(`SELECT a.*, u.name AS uploaded_by_name FROM attachments a LEFT JOIN users u ON u.id = a.uploaded_by
+                            WHERE a.card_id = ? ORDER BY a.id DESC`, cardId)
+    .map((a) => ({ ...a, url: `/uploads/${a.filename}`, is_image: a.mime.startsWith('image/') }));
+  const movements = q.all(`SELECT m.*, u.name AS user_name, fc.name AS from_name, tc.name AS to_name
+                           FROM card_movements m LEFT JOIN users u ON u.id = m.user_id
+                           LEFT JOIN columns fc ON fc.id = m.from_column_id LEFT JOIN columns tc ON tc.id = m.to_column_id
+                           WHERE m.card_id = ? ORDER BY m.moved_at, m.id`, cardId);
+  const durations = columnDurations(movements);
+  card.movements = movements;
+  card.column_time = Object.entries(durations).map(([columnId, ms]) => ({ column_id: Number(columnId), name: columnName(Number(columnId)), ms }));
+  card.activity = q.all(`SELECT a.*, u.name AS user_name FROM activity a LEFT JOIN users u ON u.id = a.user_id
+                         WHERE a.card_id = ? ORDER BY a.id DESC LIMIT 300`, cardId)
+    .map((a) => ({ ...a, details: parseJSON(a.details, {}) }));
+  return card;
+}
+
+function httpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+module.exports = {
+  FIELD_TYPES, fieldDefs, normalizeValue, displayValue, logActivity, createCard, moveCard, updateCard, deleteCard,
+  serializeCards, cardDetail, httpError, boardColumns, applyCycle, parseJSON,
+};
