@@ -1,0 +1,53 @@
+'use strict';
+const path = require('node:path');
+const express = require('express');
+const { UPLOAD_DIR } = require('./db');
+const auth = require('./auth');
+const shopify = require('./shopify');
+const notifications = require('./notifications');
+const { router } = require('./routes');
+require('./sheets'); // registra a sincronização automática com Google Planilhas
+
+const app = express();
+app.set('trust proxy', true);
+app.disable('x-powered-by');
+
+// Webhook do Shopify: precisa do corpo bruto para validar a assinatura HMAC
+app.post('/webhooks/shopify/orders', express.raw({ type: '*/*', limit: '5mb' }), (req, res) => {
+  const config = shopify.getConfig();
+  if (!shopify.verifyHmac(req.body, req.get('X-Shopify-Hmac-Sha256'), config.webhook_secret)) {
+    return res.status(401).send('assinatura inválida');
+  }
+  res.status(200).send('ok'); // responde logo; o Shopify espera no máximo 5 s
+  if (!config.enabled) return;
+  const topic = req.get('X-Shopify-Topic') || 'orders/create';
+  if (!/^orders\/(create|paid|updated)$/.test(topic)) return;
+  let order;
+  try { order = JSON.parse(req.body.toString('utf8')); } catch { return; }
+  shopify.importOrder(shopify.normalizeRestOrder(order, config.shop_domain || req.get('X-Shopify-Shop-Domain')), config)
+    .then((n) => n && console.log(`[shopify] pedido ${order.name}: ${n} card(s) criado(s)`))
+    .catch((err) => console.error('[shopify]', err.message));
+});
+
+app.use(express.json({ limit: '2mb' }));
+app.use(auth.loadUser);
+app.use('/api', router);
+
+// Anexos só para usuários logados
+app.use('/uploads', (req, res, next) => (req.user ? next() : res.status(401).end()), express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
+app.use('/vendor/sortable', express.static(path.dirname(require.resolve('sortablejs/Sortable.min.js'))));
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+app.use((err, req, res, _next) => {
+  const status = err.status || (err.code === 'LIMIT_FILE_SIZE' ? 413 : 500);
+  if (status >= 500) console.error(err);
+  res.status(status).json({ error: status >= 500 && !err.status ? 'Erro interno do servidor.' : err.message });
+});
+
+const PORT = Number(process.env.PORT || 3000);
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Kanban de produção rodando em http://localhost:${PORT}`));
+  notifications.start();
+}
+
+module.exports = app;

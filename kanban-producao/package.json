@@ -1,0 +1,21 @@
+{
+  "name": "kanban-producao",
+  "version": "1.0.0",
+  "description": "Kanban estilo Trello para produção de anéis de noivado, integrado ao Shopify e Google Sheets",
+  "main": "server/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^4.22.3",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.1.1",
+    "sortablejs": "^1.15.7"
+  }
+}
