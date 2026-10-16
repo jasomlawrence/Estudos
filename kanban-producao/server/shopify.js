@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { q, getSetting } = require('./db');
 const { createCard, logActivity } = require('./cards');
+const correios = require('./correios');
 
 const DEFAULT_API_VERSION = '2025-07';
 
@@ -14,6 +15,10 @@ const SOURCES = [
   { key: 'customer_email', label: 'E-mail do cliente' },
   { key: 'customer_phone', label: 'Telefone do cliente' },
   { key: 'shipping_address', label: 'Endereço de entrega' },
+  { key: 'shipping_zip', label: 'CEP de entrega' },
+  { key: 'promised_date', label: 'Data de entrega prometida (Correios)' },
+  { key: 'correios_days', label: 'Prazo dos Correios (dias úteis)' },
+  { key: 'posting_deadline', label: 'Postar até (Correios)' },
   { key: 'order_note', label: 'Observação do pedido' },
   { key: 'total_price', label: 'Valor total do pedido' },
   { key: 'financial_status', label: 'Status do pagamento' },
@@ -78,6 +83,8 @@ function normalizeRestOrder(o, shopDomain) {
     financial_status: o.financial_status || '',
     customer_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || o.shipping_address?.name || o.billing_address?.name || '',
     shipping_address: formatAddress(o.shipping_address),
+    zip: o.shipping_address?.zip || '',
+    attributes: Object.fromEntries((o.note_attributes || []).map((a) => [a.name, a.value])),
     admin_url: shopDomain ? `https://${shopDomain}/admin/orders/${o.id}` : null,
     line_items: (o.line_items || []).map((li) => ({
       id: String(li.id),
@@ -110,6 +117,8 @@ function normalizeGraphqlOrder(o, shopDomain) {
     financial_status: (o.displayFinancialStatus || '').toLowerCase(),
     customer_name: [c.firstName, c.lastName].filter(Boolean).join(' ') || o.shippingAddress?.name || '',
     shipping_address: formatAddress(addr),
+    zip: o.shippingAddress?.zip || '',
+    attributes: Object.fromEntries((o.customAttributes || []).map((a) => [a.key, a.value])),
     admin_url: shopDomain ? `https://${shopDomain}/admin/orders/${id}` : null,
     line_items: (o.lineItems?.nodes || []).map((li) => ({
       id: gidToId(li.id),
@@ -205,6 +214,8 @@ function buildCards(order, config, productInfo = {}) {
       fields,
       dueDate,
       labels: config.label_ids || [],
+      props: Object.assign({}, ...g.items.map((li) => li.properties)),
+      shipping: { zip: correios.onlyDigits(order.zip) || null },
     };
   });
 }
@@ -218,8 +229,10 @@ async function importOrder(order, config = getConfig(), userId = null) {
     if (ids.length) productInfo = await fetchProductInfo(config, ids).catch(() => ({}));
   }
   let created = 0;
+  const correiosConfig = correios.getConfig();
   for (const data of buildCards(order, config, productInfo)) {
     if (q.get('SELECT id FROM cards WHERE external_id = ?', data.externalId)) continue;
+    if (correiosConfig.enabled) await applyCorreios(data, order, config, correiosConfig);
     try {
       createCard({ ...data, boardId: config.board_id, columnId: config.column_id, source: 'shopify' }, userId);
       created++;
@@ -229,6 +242,28 @@ async function importOrder(order, config = getConfig(), userId = null) {
   }
   if (created) logActivity(config.board_id, null, userId, 'shopify.imported', { order: order.name, cards: created });
   return created;
+}
+
+/**
+ * Prazo do card = data de entrega prometida − prazo dos Correios (− folga).
+ * Se não der para calcular, mantém o prazo padrão e explica o motivo na descrição.
+ */
+async function applyCorreios(data, order, config, correiosConfig) {
+  const promised = correios.promisedDate({ props: data.props, attributes: order.attributes, createdAt: order.created_at }, correiosConfig);
+  data.shipping = { ...data.shipping, promised };
+  let values = { promised_date: promised, shipping_zip: data.shipping.zip };
+  try {
+    const r = await correios.deadline({ zip: order.zip, promised }, correiosConfig);
+    data.dueDate = r.dueDate;
+    data.shipping = { ...data.shipping, days: r.days, service: r.service };
+    data.description += `\n\n📦 ${r.summary}`;
+    values = r.values;
+  } catch (err) {
+    data.description += `\n\n⚠️ Prazo dos Correios não calculado (${err.message}). Foi usado o prazo padrão.`;
+  }
+  for (const [fieldId, source] of Object.entries(config.mapping || {})) {
+    if (source in values && values[source] != null && values[source] !== '') data.fields[fieldId] = values[source];
+  }
 }
 
 async function graphql(config, query, variables = {}) {
@@ -245,6 +280,7 @@ async function graphql(config, query, variables = {}) {
 
 const ORDER_FIELDS = `
   id legacyResourceId name createdAt note email phone currencyCode displayFinancialStatus
+  customAttributes { key value }
   totalPriceSet { shopMoney { amount } }
   customer { firstName lastName email phone }
   shippingAddress { name address1 address2 city province provinceCode zip country phone }

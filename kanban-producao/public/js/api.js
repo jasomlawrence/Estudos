@@ -49,7 +49,8 @@ export async function attempt(fn, success) {
 export function modal({ title, wide = false, onClose, className = '' } = {}) {
   const body = h('div', { class: 'modal-body' });
   const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); onClose?.(); };
-  const onKey = (e) => { if (e.key === 'Escape' && document.querySelector('.modal-overlay:last-of-type') === overlay) close(); };
+  // Esc fecha só a janela de cima (com avisos na tela, :last-of-type não identificava a janela certa)
+  const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-overlay')].pop() === overlay) close(); };
   const box = h('div', { class: `modal ${wide ? 'wide' : ''} ${className}`, role: 'dialog', 'aria-modal': 'true' },
     h('div', { class: 'modal-head' }, h('h2', {}, title || ''), h('button', { class: 'icon-btn', 'aria-label': 'Fechar', onclick: close }, icon('x', 18))),
     body);

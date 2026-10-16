@@ -164,6 +164,12 @@ CREATE TABLE IF NOT EXISTS notification_log (
 );
 `);
 
+// Colunas novas em bancos já existentes (dados de envio pelos Correios)
+const cardColumns = db.prepare('PRAGMA table_info(cards)').all().map((c) => c.name);
+for (const [col, type] of [['shipping_zip', 'TEXT'], ['promised_date', 'TEXT'], ['correios_days', 'INTEGER'], ['correios_service', 'TEXT']]) {
+  if (!cardColumns.includes(col)) db.exec(`ALTER TABLE cards ADD COLUMN ${col} ${type}`);
+}
+
 // Visual pastel (v2): troca as cores padrão antigas pelas novas, sem tocar nas cores escolhidas pelo usuário
 const DEFAULT_BACKGROUND = 'g:aurora';
 const DEFAULT_COLUMN_COLOR = '#eef1f8';

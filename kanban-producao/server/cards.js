@@ -133,10 +133,13 @@ const createCard = transaction((data, userId) => {
   const position = data.top
     ? (q.get('SELECT MIN(position) AS p FROM cards WHERE column_id = ?', column.id).p ?? 1024) - 1024
     : positionBetween(column.id, null, null);
-  const info = q.run(`INSERT INTO cards (board_id, column_id, title, description, color, position, due_date, source, external_id, external_url, created_by, created_at, updated_at)
-                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  const ship = data.shipping || {};
+  const info = q.run(`INSERT INTO cards (board_id, column_id, title, description, color, position, due_date, source, external_id, external_url, created_by, created_at, updated_at,
+                                         shipping_zip, promised_date, correios_days, correios_service)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     column.board_id, column.id, String(data.title || 'Sem título').slice(0, 500), data.description || '', data.color || null, position,
-    data.dueDate || null, data.source || 'manual', data.externalId || null, data.externalUrl || null, userId ?? null, at, at);
+    data.dueDate || null, data.source || 'manual', data.externalId || null, data.externalUrl || null, userId ?? null, at, at,
+    ship.zip || null, ship.promised || null, ship.days ?? null, ship.service || null);
   const cardId = Number(info.lastInsertRowid);
   const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
   q.run('INSERT INTO card_movements (card_id, from_column_id, to_column_id, user_id, moved_at) VALUES (?, NULL, ?, ?, ?)', cardId, column.id, userId ?? null, at);
@@ -258,6 +261,10 @@ function serializeCards(rows) {
     due_date: r.due_date,
     source: r.source,
     external_url: r.external_url,
+    shipping_zip: r.shipping_zip,
+    promised_date: r.promised_date,
+    correios_days: r.correios_days,
+    correios_service: r.correios_service,
     archived: !!r.archived,
     cycle_started_at: r.cycle_started_at,
     cycle_ended_at: r.cycle_ended_at,

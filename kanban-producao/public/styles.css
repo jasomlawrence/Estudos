@@ -573,3 +573,7 @@ body.dragging { cursor: grabbing; }
 body.dragging .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(255, 255, 255, .9); }
 /* Listas que rolam: rolagem suave e isolada (não "puxa" a página toda no iPad) */
 .cards, .cal-side, .board, .calendar { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+
+/* ---------- Envio pelos Correios (no card) ---------- */
+.shipping-form { margin-top: 10px; align-items: flex-end; }
+.shipping-form .field { min-width: 160px; }

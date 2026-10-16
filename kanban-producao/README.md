@@ -13,6 +13,7 @@ Quadro estilo Trello para acompanhar a produção da joalheria, conectado ao **S
 | **Imagens e capa** | Anexe imagens arrastando, escolhendo o arquivo ou colando (Ctrl+V). A primeira imagem vira capa automaticamente; dá para trocar ou tirar a capa a qualquer momento. Também aceita PDF, STL, 3DM etc. |
 | **Cor do card e etiquetas** | Cada card pode ter cor de fundo (paleta ou cor livre) e etiquetas coloridas criadas por você. |
 | **Shopify** | Webhook "Criação de pedido": pedidos com anel de noivado (por palavra no nome do produto, ID do produto ou tag) viram cards na coluna escolhida, com cliente, tamanho do aro, gravação etc. já preenchidos nos seus campos. Pedidos repetidos não são duplicados. |
+| **Correios** | Para clientes com contrato: ao chegar um pedido, consulta o prazo dos Correios até o CEP do cliente e define o prazo do card como *entrega prometida − prazo dos Correios − folga* (dias úteis, sem feriados nacionais). O card mostra "Postar até" e tem um botão para recalcular. |
 | **Google Planilhas** | Você escolhe quais campos do card viram colunas da planilha. Cada card é uma linha, atualizada automaticamente a cada mudança. Há um botão para reenviar tudo. |
 | **Tempo de produção** | Defina a coluna onde o cronômetro começa e a coluna final. Cada card mostra há quanto tempo está em produção e, ao chegar na última coluna, o tempo total. O relatório "⏱ Produção" mostra média, mediana, mais rápido/lento, % entregue no prazo e tempo médio em cada etapa. |
 | **Vários usuários + histórico** | Perfis: administrador, editor e somente leitura. Tudo o que cada pessoa faz (mover, editar campo, anexar, mudar cor…) fica registrado com nome e horário, no card e no histórico geral. As telas se atualizam sozinhas quando outra pessoa mexe. |
@@ -60,6 +61,17 @@ Em **⚙ Configurações → Shopify**:
 2. **Ou com app personalizado** (Configurações → Apps → Desenvolver apps), com permissões `read_orders` e `read_products`: coloque o **token da Admin API** (`shpat_…`) e a **chave secreta do app** no campo da chave, e clique em *Registrar webhook automaticamente*. Com o token você também pode **importar pedidos antigos** (últimos N dias) e filtrar por **tags** de produto.
 3. Defina as **palavras‑chave** (padrão: "anel de noivado, noivado, solitário"), a **coluna de entrada**, o **prazo** (dias após o pedido) e **qual dado do pedido preenche cada campo**, incluindo personalizações do produto como "Tamanho do aro" ou "Gravação".
 4. Marque **Integração ativa** e salve.
+
+## Conectando os Correios (prazo automático)
+
+Em **⚙ Configurações → Correios**:
+
+1. Preencha o **usuário** do Meu Correios, o **código de acesso às APIs** (gerado em [cws.correios.com.br](https://cws.correios.com.br) → "Gestão de acesso a API's"; não é a senha do site) e o **cartão de postagem**. O contrato precisa ter o serviço **38210 – API PRAZOS**.
+2. Informe o **CEP de origem**, o **serviço** (SEDEX, PAC…), a **folga** em dias úteis e o horário limite de postagem.
+3. Diga **onde está a data de entrega prometida** no pedido: numa personalização do produto, num atributo do pedido (informação do carrinho) ou "X dias depois do pedido". Informe o nome exato do campo (ex.: "Data de entrega").
+4. Use **Consultar prazo** para testar com um CEP e marque **Integração ativa**.
+
+Se a data prometida não for encontrada ou os Correios não responderem, o card usa o prazo padrão da integração do Shopify e a descrição explica o motivo. Dentro de cada card, a seção **Envio (Correios)** permite corrigir o CEP ou a data e recalcular.
 
 ## Conectando o Google Planilhas
 
