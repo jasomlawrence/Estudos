@@ -576,7 +576,7 @@ router.put('/integrations/correios', auth.requireAdmin, (req, res) => {
   delete next.services;
   if (isMasked(next.codigo_acesso)) next.codigo_acesso = current.codigo_acesso;
   if (!['producao', 'homologacao'].includes(next.environment)) next.environment = 'producao';
-  if (!['property', 'attribute', 'days'].includes(next.promised_source)) next.promised_source = 'property';
+  if (!['auto', 'property', 'attribute', 'days'].includes(next.promised_source)) next.promised_source = 'auto';
   next.cep_origem = correios.onlyDigits(next.cep_origem);
   next.servico = String(next.servico || '03220').replace(/[^\w]/g, '');
   next.margem_dias = Math.max(0, Number(next.margem_dias) || 0);

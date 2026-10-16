@@ -227,9 +227,9 @@ const PANELS = {
       servico: h('select', {}, c.services.map((s) => h('option', { value: s.code, selected: s.code === c.servico }, `${s.label} — ${s.code}`)),
         c.services.some((s) => s.code === c.servico) ? null : h('option', { value: c.servico, selected: true }, c.servico)),
       promised_source: h('select', {},
-        [['property', 'Personalização do produto (campo do item)'], ['attribute', 'Atributo do pedido (informação do carrinho)'], ['days', 'X dias depois do pedido']]
+        [['auto', 'Procurar em todo o pedido (personalização, atributos e observação)'], ['property', 'Só na personalização do produto'], ['attribute', 'Só nos atributos do pedido'], ['days', 'X dias depois do pedido']]
           .map(([v, l]) => h('option', { value: v, selected: v === c.promised_source }, l))),
-      promised_name: h('input', { value: c.promised_name, placeholder: 'Ex.: Data de entrega' }),
+      promised_name: h('input', { value: c.promised_name, placeholder: 'Ex.: Data estimada de entrega' }),
       promised_days: h('input', { type: 'number', min: 0, value: c.promised_days }),
       margem_dias: h('input', { type: 'number', min: 0, value: c.margem_dias }),
       hora_postagem: h('input', { type: 'time', value: c.hora_postagem }),
@@ -263,7 +263,7 @@ const PANELS = {
       h('fieldset', {}, h('legend', {}, '3. Onde está a data de entrega prometida'),
         h('label', { class: 'form-row' }, 'Origem da data', f.promised_source),
         nameRow, daysRow,
-        h('p', { class: 'muted small' }, 'Aceita datas como 25/12/2026, 2026-12-25 ou "25 de dezembro de 2026". Se a data não for encontrada ou os Correios não responderem, o card usa o prazo padrão do Shopify e a descrição explica o motivo.')),
+        h('p', { class: 'muted small' }, `Aceita datas como 25/12/2026, 25/12, 2026-12-25, "25 de dezembro" ou "25 de dez."; num intervalo ("20/11 a 25/11") usa a primeira data. Se a data não for encontrada ou os Correios não responderem, o card usa o prazo padrão do Shopify e a descrição explica o motivo.`)),
       h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: save }, 'Salvar')),
       h('fieldset', {}, h('legend', {}, 'Testar'),
         h('div', { class: 'row wrap' }, testZip, h('span', { class: 'muted small' }, 'entrega prometida (opcional)'), testDate,

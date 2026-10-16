@@ -249,7 +249,7 @@ async function importOrder(order, config = getConfig(), userId = null) {
  * Se não der para calcular, mantém o prazo padrão e explica o motivo na descrição.
  */
 async function applyCorreios(data, order, config, correiosConfig) {
-  const promised = correios.promisedDate({ props: data.props, attributes: order.attributes, createdAt: order.created_at }, correiosConfig);
+  const promised = correios.promisedDate({ props: data.props, attributes: order.attributes, note: order.note, createdAt: order.created_at }, correiosConfig);
   data.shipping = { ...data.shipping, promised };
   let values = { promised_date: promised, shipping_zip: data.shipping.zip };
   try {

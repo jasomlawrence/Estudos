@@ -15,6 +15,11 @@ test('lê a data de entrega em vários formatos', () => {
   assert.strictEqual(correios.parseDate('25 de Março de 2026'), '2026-03-25');
   assert.strictEqual(correios.parseDate('31/02/2026'), null);
   assert.strictEqual(correios.parseDate('amanhã'), null);
+  const ref = new Date('2026-10-15T12:00:00Z');
+  assert.strictEqual(correios.parseDate('20/11', ref), '2026-11-20');
+  assert.strictEqual(correios.parseDate('05/01', new Date('2026-12-10T12:00:00Z')), '2027-01-05'); // virada do ano
+  assert.strictEqual(correios.parseDate('sexta-feira, 20 de nov. – quarta, 25 de nov.', ref), '2026-11-20');
+  assert.strictEqual(correios.parseDate('Entre 20/11 e 25/11/2026', ref), '2026-11-20');
 });
 
 test('feriados nacionais, inclusive os móveis', () => {
@@ -56,14 +61,14 @@ test('pedido do Shopify: prazo do card = entrega prometida − Correios − folg
   const dateField = Number(q.run("INSERT INTO field_defs (board_id, name, type, position) VALUES (?, 'Entrega ao cliente', 'date', 99)", boardId).lastInsertRowid);
   setSetting('correios', {
     enabled: true, usuario: 'ateliê', codigo_acesso: 'codigo123', cartao: '0073.423.760', cep_origem: '01310-100',
-    servico: '03220', promised_source: 'property', promised_name: 'Data de entrega', margem_dias: 1, hora_postagem: '15:00',
+    servico: '03220', promised_source: 'auto', promised_name: 'Data estimada de entrega', margem_dias: 1, hora_postagem: '15:00',
   });
   const calls = [];
   mockCorreios(2, calls);
 
   const order = JSON.parse(JSON.stringify(require('./fixtures/order.json')));
   order.id = 999; // pedido novo
-  order.line_items[0].properties.push({ name: 'Data de entrega', value: '20/11/2026' });
+  order.line_items[0].properties.push({ name: 'Data estimada de entrega:', value: '20/11/2026' });
   order.shipping_address.zip = '20010-000';
   const config = { enabled: true, board_id: boardId, column_id: col, keywords: 'anel de noivado', mapping: { [dateField]: 'promised_date' }, due_days: 30, title_template: '{order_name}' };
   assert.strictEqual(await shopify.importOrder(shopify.normalizeRestOrder(order, ''), config), 1);
@@ -86,4 +91,13 @@ test('pedido do Shopify: prazo do card = entrega prometida − Correios − folg
   const card2 = q.get('SELECT * FROM cards WHERE external_id LIKE ?', 'shopify:1000:%');
   assert.match(card2.description, /Prazo dos Correios não calculado/);
   assert.strictEqual(card2.due_date.slice(0, 10), '2026-11-14');
+
+  // Data na observação do pedido, como intervalo e sem ano
+  const order3 = JSON.parse(JSON.stringify(require('./fixtures/order.json')));
+  order3.id = 1001;
+  order3.note = 'Presente!\nData estimada de entrega: 20 de nov. - 25 de nov.';
+  await shopify.importOrder(shopify.normalizeRestOrder(order3, ''), config);
+  const card3 = q.get('SELECT * FROM cards WHERE external_id LIKE ?', 'shopify:1001:%');
+  assert.strictEqual(card3.promised_date, '2026-11-20');
+  assert.strictEqual(card3.due_date, '2026-11-17T18:00:00.000Z');
 });

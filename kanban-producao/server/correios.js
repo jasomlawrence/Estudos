@@ -23,8 +23,8 @@ function getConfig() {
     contrato: '',
     cep_origem: '',
     servico: '03220',
-    promised_source: 'property', // property | attribute | days
-    promised_name: 'Data de entrega',
+    promised_source: 'auto', // auto (procura em todo o pedido) | property | attribute | days
+    promised_name: 'Data estimada de entrega',
     promised_days: 30,
     margem_dias: 1, // dias úteis de folga além do prazo dos Correios
     hora_postagem: '15:00',
@@ -79,24 +79,36 @@ async function quote(cepDestino, config = getConfig()) {
 }
 
 // ---------------- Datas ----------------
-const MONTHS = ['janeiro', 'fevereiro', 'marco', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const fold = (str) => String(str || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
 
-/** Lê datas como 25/12/2026, 25-12-26, 2026-12-25 ou "25 de dezembro de 2026". Retorna AAAA-MM-DD. */
-function parseDate(input) {
-  const s = String(input || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
-  let y; let m; let d;
-  let r = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
-  if (r) [, y, m, d] = r;
-  else if ((r = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/.exec(s))) [, d, m, y] = r;
-  else if ((r = /^(\d{1,2})\s+de\s+([a-z]+)(?:\s+de)?\s+(\d{4})$/.exec(s))) {
-    d = r[1]; y = r[3]; m = MONTHS.indexOf(r[2]) + 1;
-    if (!m) return null;
-  } else return null;
-  y = Number(y); m = Number(m); d = Number(d);
-  if (y < 100) y += 2000;
-  const date = new Date(Date.UTC(y, m - 1, d));
-  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
-  return date.toISOString().slice(0, 10);
+/**
+ * Encontra a primeira data num texto: 25/12/2026, 25/12, 25-12-26, 2026-12-25,
+ * "25 de dezembro de 2026", "sexta, 20 de nov." ou um intervalo ("20/11 a 25/11" → usa a primeira).
+ * Sem ano, usa o ano do pedido (ou o seguinte, se a data já tiver passado). Retorna AAAA-MM-DD.
+ */
+function parseDate(input, ref = new Date()) {
+  const s = fold(input);
+  const found = [];
+  let r = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  if (r) found.push({ at: r.index, y: r[1], m: r[2], d: r[3] });
+  r = /(?<!\d)(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{4}|\d{2}))?(?![\d/.-]?\d)/.exec(s);
+  if (r) found.push({ at: r.index, d: r[1], m: r[2], y: r[3] });
+  r = /(?<!\d)(\d{1,2})(?:\s+de)?\s+(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-z]*\.?(?:\s+de)?(?:\s+(\d{4}))?/.exec(s);
+  if (r) found.push({ at: r.index, d: r[1], m: MONTHS.indexOf(r[2]) + 1, y: r[3] });
+  found.sort((a, b) => a.at - b.at);
+  for (const f of found) {
+    const d = Number(f.d);
+    const m = Number(f.m);
+    const refDate = new Date(ref);
+    let y = f.y ? Number(f.y) : refDate.getFullYear();
+    if (y < 100) y += 2000;
+    let date = new Date(Date.UTC(y, m - 1, d));
+    if (date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) continue; // ex.: 31/02
+    if (!f.y && date.getTime() < refDate.getTime() - 30 * 864e5) date = new Date(Date.UTC(y + 1, m - 1, d));
+    return date.toISOString().slice(0, 10);
+  }
+  return null;
 }
 
 /** Feriados nacionais (fixos + Carnaval, Sexta-feira Santa e Corpus Christi), em que os Correios não entregam. */
@@ -136,13 +148,30 @@ function subtractBusinessDays(iso, n) {
 const fmt = (iso) => (iso ? iso.split('-').reverse().join('/') : '');
 
 /** Data de entrega prometida ao cliente, conforme configurado. */
-function promisedDate({ props = {}, attributes = {}, createdAt }, config = getConfig()) {
-  const want = String(config.promised_name || '').trim().toLowerCase();
-  const pick = (obj) => Object.entries(obj).find(([k]) => k.trim().toLowerCase() === want)?.[1];
-  if (config.promised_source === 'property') return parseDate(pick(props));
-  if (config.promised_source === 'attribute') return parseDate(pick(attributes));
-  const base = createdAt ? new Date(createdAt) : new Date();
-  return new Date(base.getTime() + Number(config.promised_days || 0) * 864e5).toISOString().slice(0, 10);
+function promisedDate({ props = {}, attributes = {}, note = '', createdAt }, config = getConfig()) {
+  const ref = createdAt ? new Date(createdAt) : new Date();
+  if (config.promised_source === 'days') {
+    return new Date(ref.getTime() + Number(config.promised_days || 0) * 864e5).toISOString().slice(0, 10);
+  }
+  // Compara nomes ignorando acentos, maiúsculas, espaços e os dois-pontos do final ("Data estimada de entrega:")
+  const key = (k) => fold(k).replace(/[\s:]+$/, '').trim();
+  const want = key(config.promised_name);
+  const pick = (obj) => Object.entries(obj || {}).find(([k]) => key(k) === want)?.[1];
+  const auto = !config.promised_source || config.promised_source === 'auto';
+  const candidates = [];
+  if (auto || config.promised_source === 'property') candidates.push(pick(props));
+  if (auto || config.promised_source === 'attribute') candidates.push(pick(attributes));
+  if (auto && note && want) {
+    // Também procura na observação do pedido: "Data estimada de entrega: 20/11/2026"
+    const escaped = want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = new RegExp(`${escaped}\\s*:?\\s*([^\\n]+)`).exec(fold(note));
+    if (m) candidates.push(m[1]);
+  }
+  for (const value of candidates) {
+    const date = value && parseDate(value, ref);
+    if (date) return date;
+  }
+  return null;
 }
 
 /**
