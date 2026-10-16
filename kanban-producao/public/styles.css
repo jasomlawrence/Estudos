@@ -28,7 +28,7 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body { background: var(--board-bg); background-attachment: fixed; display: flex; flex-direction: column; overflow: hidden; }
+body { background: var(--board-bg); display: flex; flex-direction: column; overflow: hidden; }
 button, input, select, textarea { font: inherit; color: inherit; }
 input, select, textarea {
   border: 1px solid var(--border); border-radius: 10px; padding: 8px 11px; background: #fff; min-width: 0; transition: border-color .15s, box-shadow .15s;
@@ -171,7 +171,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
 .add-card textarea { margin-bottom: 8px; border: 0; box-shadow: var(--shadow-sm); border-radius: 12px; }
 .add-column {
   width: var(--column-width); flex-shrink: 0; background: rgba(255, 255, 255, .4); border: 1.5px dashed rgba(42, 37, 64, .18);
-  border-radius: 18px; padding: 6px; color: var(--ink); backdrop-filter: blur(8px);
+  border-radius: 18px; padding: 6px; color: var(--ink);
 }
 .add-column:has(input) { background: rgba(255, 255, 255, .9); border-style: solid; border-color: transparent; padding: 10px; box-shadow: var(--shadow-sm); }
 .add-column input { width: 100%; margin-bottom: 8px; }
@@ -211,7 +211,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
 .card-members .avatar + .avatar { margin-left: -7px; }
 .card-ghost { opacity: .35; outline: 2px dashed var(--primary); outline-offset: -2px; }
 .card-chosen { box-shadow: 0 0 0 2px var(--primary); }
-.card-drag { transform: rotate(2.5deg); box-shadow: var(--shadow-lg); }
+.card-drag { rotate: 2deg; box-shadow: var(--shadow-lg); }
 body.dragging .card:hover { transform: none; box-shadow: var(--shadow-sm); }
 .chip {
   display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); border-radius: 999px; padding: 3px 10px; font-size: 12px;
@@ -553,3 +553,23 @@ tr.clickable:hover { background: var(--surface-2); }
   .top-actions .top-btn .lbl { display: none; }
   .top-actions .top-btn { padding: 8px; }
 }
+
+/* ---------- Arrastar e soltar (fluidez em tablet e celular) ---------- */
+/* Impede o menu de "copiar/selecionar" do iPad/Android ao segurar o card */
+.card, .cal-chip, .column-head { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+.column-title:focus { -webkit-user-select: text; user-select: text; }
+/* Card "pego": leve aumento para mostrar que já pode arrastar */
+.card-chosen, .cal-chip.card-chosen { transform: scale(1.03); box-shadow: 0 0 0 2px var(--primary), var(--shadow-md); transition: transform .12s ease-out; }
+/* Cópia que segue o dedo/mouse, desenhada pelo Sortable */
+.sortable-fallback {
+  opacity: 1 !important; transform-origin: 50% 50%; box-shadow: var(--shadow-lg) !important; border-radius: 14px;
+  will-change: transform; pointer-events: none; z-index: 1000;
+}
+
+/* Durante o arraste: sem animações de hover/sombra que pesam no tablet */
+body.dragging .card, body.dragging .cal-chip, body.dragging .column, body.dragging .cal-day { transition: none !important; }
+body.dragging .card:hover, body.dragging .cal-chip:hover, body.dragging .column.collapsed:hover { transform: none; box-shadow: var(--shadow-sm); }
+body.dragging { cursor: grabbing; }
+body.dragging .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(255, 255, 255, .9); }
+/* Listas que rolam: rolagem suave e isolada (não "puxa" a página toda no iPad) */
+.cards, .cal-side, .board, .calendar { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }

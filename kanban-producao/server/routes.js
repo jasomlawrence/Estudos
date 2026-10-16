@@ -397,7 +397,8 @@ router.patch('/cards/:id', (req, res) => {
 
 router.post('/cards/:id/move', (req, res) => {
   cards.moveCard(Number(req.params.id), { columnId: Number(req.body.columnId), prevId: req.body.prevId, nextId: req.body.nextId }, req.user.id);
-  res.json({ ok: true });
+  // Devolve o card atualizado para a tela trocar só ele, sem redesenhar o quadro inteiro
+  res.json(cards.serializeCards([q.get('SELECT * FROM cards WHERE id = ?', Number(req.params.id))])[0]);
 });
 
 router.delete('/cards/:id', (req, res) => {

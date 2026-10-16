@@ -16,6 +16,14 @@ export const state = {
   openCardId: null,
 };
 
+// Alterações feitas por este navegador: o aviso de tempo real que volta delas não precisa redesenhar a tela
+const localEdits = new Map();
+export function markLocalEdit(cardId) { localEdits.set(cardId, Date.now()); }
+export function isOwnEcho(data) {
+  if (data.userId !== state.user?.id || !data.cardIds?.length) return false;
+  return data.cardIds.every((id) => Date.now() - (localEdits.get(id) || 0) < 5000);
+}
+
 export const isAdmin = () => state.user?.role === 'admin';
 export const canEdit = () => state.user && state.user.role !== 'viewer';
 export const userById = (id) => state.users.find((u) => u.id === id);
