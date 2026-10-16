@@ -159,6 +159,58 @@ router.get('/boards/:id', (req, res) => {
   });
 });
 
+// ---------------- Calendário ----------------
+const CALENDAR_DEFAULTS = { date_source: 'due_date', show: ['title', 'column', 'labels', 'time'], color_by: 'card', mode: 'month' };
+const calendarPrefsKey = (userId, boardId) => `calendar:${userId}:${boardId}`;
+
+function calendarPrefs(userId, boardId) {
+  return { ...CALENDAR_DEFAULTS, ...getSetting(calendarPrefsKey(userId, boardId), {}) };
+}
+
+/** Coluna SQL que contém a data usada no calendário (prazo, criação ou um campo de data) */
+function calendarDateSql(source, boardId) {
+  if (source === 'due_date' || source === 'created_at') return { join: '', expr: `c.${source}`, params: [] };
+  const m = /^field:(\d+)$/.exec(source);
+  const field = m && q.get("SELECT id FROM field_defs WHERE id = ? AND board_id = ? AND type IN ('date', 'datetime')", Number(m[1]), boardId);
+  if (!field) throw httpError(400, 'Escolha uma data válida para o calendário.');
+  return { join: 'LEFT JOIN card_field_values v ON v.card_id = c.id AND v.field_id = ?', expr: "json_extract(v.value, '$')", params: [field.id] };
+}
+
+router.get('/boards/:id/calendar', (req, res) => {
+  const board = boardOr404(req.params.id);
+  const prefs = calendarPrefs(req.user.id, board.id);
+  const from = String(req.query.from || '');
+  const to = String(req.query.to || '');
+  if (!from || !to) throw httpError(400, 'Informe o período.');
+  let date;
+  try { date = calendarDateSql(String(req.query.date || prefs.date_source), board.id); } catch {
+    prefs.date_source = 'due_date'; // o campo de data escolhido foi excluído
+    date = calendarDateSql('due_date', board.id);
+  }
+  const archived = req.query.archived === '1' ? 1 : 0;
+  const filter = cardFilter(String(req.query.q || '').trim());
+  const base = `FROM cards c ${date.join} WHERE c.board_id = ? AND c.archived = ? ${filter.sql}`;
+  const params = [...date.params, board.id, archived, ...filter.params];
+  const rows = q.all(`SELECT c.* ${base} AND ${date.expr} >= ? AND ${date.expr} < ? ORDER BY ${date.expr} LIMIT 3000`, ...params, from, to);
+  const undated = q.all(`SELECT c.* ${base} AND ${date.expr} IS NULL ORDER BY c.created_at DESC LIMIT 100`, ...params);
+  const undatedTotal = q.get(`SELECT COUNT(*) AS n ${base} AND ${date.expr} IS NULL`, ...params).n;
+  res.json({ prefs, cards: cards.serializeCards(rows), undated: cards.serializeCards(undated), undated_total: undatedTotal });
+});
+
+// Preferências do calendário são de cada usuário (o que mostrar, qual data usar)
+router.put('/boards/:id/calendar-prefs', (req, res) => {
+  const board = boardOr404(req.params.id);
+  const current = calendarPrefs(req.user.id, board.id);
+  const next = { ...current };
+  const { date_source, show, color_by, mode } = req.body;
+  if (date_source !== undefined) { calendarDateSql(String(date_source), board.id); next.date_source = String(date_source); }
+  if (Array.isArray(show)) next.show = show.map(String).filter((k) => /^(title|column|labels|members|time|cover|field:\d+)$/.test(k));
+  if (['card', 'column', 'label'].includes(color_by)) next.color_by = color_by;
+  if (['month', 'week'].includes(mode)) next.mode = mode;
+  setSetting(calendarPrefsKey(req.user.id, board.id), next);
+  res.json(next);
+});
+
 // Rolagem infinita: próxima página de cards de uma coluna
 router.get('/columns/:id/cards', (req, res) => {
   const col = q.get('SELECT * FROM columns WHERE id = ?', req.params.id);

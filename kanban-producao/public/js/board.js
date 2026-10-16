@@ -7,6 +7,8 @@ import { openCard } from './card.js';
 /* global Sortable */
 
 let sortables = [];
+// Chamados depois de cada recarga do quadro (ex.: o calendário se atualiza junto)
+export const boardLoadedHooks = [];
 
 export async function loadBoard({ keepScroll = true } = {}) {
   if (!state.boardId) return;
@@ -18,6 +20,7 @@ export async function loadBoard({ keepScroll = true } = {}) {
   const data = await get(`/boards/${state.boardId}?${params}`);
   Object.assign(state, { board: data.board, columns: data.columns, labels: data.labels, fields: data.fields, users: data.users });
   renderBoard(keepScroll);
+  boardLoadedHooks.forEach((fn) => fn());
 }
 
 export const reloadSoon = (() => {

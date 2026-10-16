@@ -65,7 +65,8 @@ function loadUser(req, _res, next) {
 function requireAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Faça login para continuar.' });
   // Visualizadores só podem ler
-  if (req.user.role === 'viewer' && req.method !== 'GET' && !req.path.startsWith('/notifications') && !req.path.startsWith('/auth')) {
+  const ownPrefs = req.path.startsWith('/notifications') || req.path.startsWith('/auth') || req.path.endsWith('/calendar-prefs');
+  if (req.user.role === 'viewer' && req.method !== 'GET' && !ownPrefs) {
     return res.status(403).json({ error: 'Seu perfil é somente leitura.' });
   }
   next();

@@ -7,6 +7,7 @@ Quadro estilo Trello para acompanhar a produção da joalheria, conectado ao **S
 | Recurso | Como funciona |
 |---|---|
 | **Colunas ilimitadas** | Crie, renomeie, reordene (arrastando pelo título), escolha a **cor** e **minimize** colunas (os cards continuam dentro, só a coluna fica estreita). Cada usuário minimiza do seu jeito. |
+| **Calendário** | Botão *Calendário* no topo mostra os cards em visão de mês ou semana, pelo prazo de entrega, pela data de criação ou por qualquer campo de data. Em *Exibir*, cada usuário escolhe o que aparece em cada card (título, horário, etapa, etiquetas, responsáveis, capa e qualquer campo personalizado) e qual cor usar. Arraste um card para outro dia para mudar a data, ou da lista *Sem prazo* para um dia para definir. |
 | **Rolagem infinita** | O quadro rola na horizontal sem limite (barra, roda do mouse ou arrastando o fundo, como no Trello). Cada coluna carrega 40 cards e busca mais conforme você rola, então aguenta milhares de pedidos. |
 | **Cards personalizáveis** | Campos criados por você: texto curto, texto longo, número, valor (R$), data, data e hora, sim/não, lista de opções (com cores), múltipla escolha, link, e‑mail e telefone (com botão de WhatsApp). Você escolhe quais aparecem no card do quadro. |
 | **Imagens e capa** | Anexe imagens arrastando, escolhendo o arquivo ou colando (Ctrl+V). A primeira imagem vira capa automaticamente; dá para trocar ou tirar a capa a qualquer momento. Também aceita PDF, STL, 3DM etc. |
