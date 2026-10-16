@@ -1,5 +1,5 @@
 // Comunicação com o servidor + avisos rápidos (toast) + janelas modais
-import { h } from './util.js';
+import { h, icon } from './util.js';
 
 export async function api(method, url, body) {
   const opts = { method, headers: {} };
@@ -51,7 +51,7 @@ export function modal({ title, wide = false, onClose, className = '' } = {}) {
   const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); onClose?.(); };
   const onKey = (e) => { if (e.key === 'Escape' && document.querySelector('.modal-overlay:last-of-type') === overlay) close(); };
   const box = h('div', { class: `modal ${wide ? 'wide' : ''} ${className}`, role: 'dialog', 'aria-modal': 'true' },
-    h('div', { class: 'modal-head' }, h('h2', {}, title || ''), h('button', { class: 'icon-btn', 'aria-label': 'Fechar', onclick: close }, '✕')),
+    h('div', { class: 'modal-head' }, h('h2', {}, title || ''), h('button', { class: 'icon-btn', 'aria-label': 'Fechar', onclick: close }, icon('x', 18))),
     body);
   const overlay = h('div', { class: 'modal-overlay', onmousedown: (e) => { if (e.target === overlay) close(); } }, box);
   document.body.append(overlay);

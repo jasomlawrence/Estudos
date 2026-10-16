@@ -1,5 +1,5 @@
 // Janela de detalhes do card: campos personalizados, anexos/capa, cor, etiquetas, histórico, tempo de produção
-import { h, $, clear, textColorFor, fmtDateTime, fmtDuration, avatar, toLocalInput, colorPicker, PALETTE, copyText } from './util.js';
+import { h, $, clear, textColorFor, fmtDateTime, fmtDuration, avatar, toLocalInput, colorPicker, PALETTE, copyText, icon } from './util.js';
 import { get, post, patch, del, api, attempt, modal, popover, confirmDialog, toast } from './api.js';
 import { state, canEdit, userById, labelById } from './state.js';
 import { activityItem } from './activity.js';
@@ -68,7 +68,7 @@ function render() {
     h('div', { class: 'card-detail-head' },
       title,
       h('div', { class: 'muted' }, 'na coluna ', columnSelect,
-        card.source === 'shopify' ? h('span', { class: 'chip shopify' }, '🛍 Pedido Shopify') : null,
+        card.source === 'shopify' ? h('span', { class: 'chip shopify' }, icon('bag', 12), ' Pedido Shopify') : null,
         card.archived ? h('span', { class: 'chip warn' }, 'Arquivado') : null)),
     h('div', { class: 'card-detail-grid' },
       h('div', { class: 'card-main' },
@@ -110,7 +110,7 @@ function metaRow(card, editable) {
     h('div', { class: 'meta' }, h('h4', {}, 'Prazo de entrega'),
       h('div', { class: 'row' },
         h('input', { type: 'datetime-local', value: toLocalInput(card.due_date), readOnly: !editable, dataset: { key: 'due' }, onchange: (e) => save({ due_date: e.target.value ? new Date(e.target.value).toISOString() : null }) }),
-        card.due_date && editable ? h('button', { class: 'icon-btn', title: 'Remover prazo', onclick: () => save({ due_date: null }) }, '✕') : null)),
+        card.due_date && editable ? h('button', { class: 'icon-btn', title: 'Remover prazo', onclick: () => save({ due_date: null }) }, icon('x')) : null)),
     h('div', { class: 'meta' }, h('h4', {}, 'Cor do card'),
       h('button', { class: 'swatch big', disabled: !editable, style: { background: card.color || 'transparent' }, title: 'Mudar cor', onclick: (e) => {
         const pop = popover(e.currentTarget, h('div', {}, h('div', { class: 'menu-title' }, 'Cor do card'), colorPicker(card.color, (c) => { pop.close(); save({ color: c }); })));
@@ -132,10 +132,10 @@ function labelPicker(anchor, card) {
           h('button', { class: 'icon-btn', title: 'Editar etiqueta', onclick: () => editLabel(l) }, '✎'));
       }),
       h('hr'),
-      h('button', { class: 'btn small', onclick: () => editLabel(null) }, '＋ Criar etiqueta'));
+      h('button', { class: 'btn small', onclick: () => editLabel(null) }, '+ Criar etiqueta'));
   };
   const editLabel = (label) => {
-    let color = label?.color || PALETTE[0];
+    let color = label?.color || PALETTE[10];
     const name = h('input', { value: label?.name || '', placeholder: 'Nome da etiqueta' });
     const preview = h('span', { class: 'label big', style: { background: color, color: textColorFor(color) } }, label?.name || 'Prévia');
     name.oninput = () => { preview.textContent = name.value || 'Prévia'; };
@@ -256,7 +256,7 @@ function attachmentsSection(card, editable) {
     ondragover: (e) => { e.preventDefault(); e.currentTarget.classList.add('over'); },
     ondragleave: (e) => e.currentTarget.classList.remove('over'),
     ondrop: (e) => { e.preventDefault(); e.currentTarget.classList.remove('over'); upload([...e.dataTransfer.files]); },
-  }, '📎 Arraste imagens aqui, clique para escolher ou cole (Ctrl+V)', input) : null;
+  }, icon('clip', 18), h('span', {}, 'Arraste imagens aqui, clique para escolher ou cole (Ctrl+V)'), input) : null;
   return h('section', {},
     h('h3', {}, `Anexos (${card.attachments.length})`),
     drop,
@@ -313,17 +313,17 @@ const stat = (label, value, cls = '') => h('div', { class: `stat ${cls}` }, h('s
 function sidebar(card, editable, col) {
   return h('aside', { class: 'card-side' },
     h('h4', {}, 'Ações'),
-    card.external_url ? h('a', { class: 'btn block', href: card.external_url, target: '_blank', rel: 'noopener' }, '🛍 Abrir pedido no Shopify') : null,
+    card.external_url ? h('a', { class: 'btn block', href: card.external_url, target: '_blank', rel: 'noopener' }, icon('bag'), 'Abrir pedido no Shopify') : null,
     editable ? h('button', { class: 'btn block', onclick: async () => {
       const r = await attempt(() => post(`/cards/${card.id}/notify`));
       if (r) { toast(`Aviso enviado: ${r.channels.join(', ') || 'nenhum canal ativo'}`, 'ok'); current.card = await get(`/cards/${card.id}`); render(); }
-    } }, '🔔 Enviar aviso de prazo agora') : null,
-    h('button', { class: 'btn block', onclick: () => { copyText(`${location.origin}/#card=${card.id}`); toast('Link copiado', 'ok'); } }, '🔗 Copiar link do card'),
-    editable ? h('button', { class: 'btn block', onclick: () => save({ archived: !card.archived }) }, card.archived ? '↩ Restaurar card' : '🗄 Arquivar card') : null,
+    } }, icon('bell'), 'Enviar aviso de prazo agora') : null,
+    h('button', { class: 'btn block', onclick: () => { copyText(`${location.origin}/#card=${card.id}`); toast('Link copiado', 'ok'); } }, icon('link'), 'Copiar link do card'),
+    editable ? h('button', { class: 'btn block', onclick: () => save({ archived: !card.archived }) }, card.archived ? [icon('restore'), 'Restaurar card'] : [icon('archive'), 'Arquivar card']) : null,
     editable ? h('button', { class: 'btn block danger', onclick: async () => {
       if (!(await confirmDialog(`Excluir definitivamente o card "${card.title}"? Os anexos também serão apagados.`, { ok: 'Excluir' }))) return;
       if (await attempt(() => del(`/cards/${card.id}`), 'Card excluído')) { current.modal.close(); reloadSoon(); }
-    } }, '🗑 Excluir card') : null,
+    } }, icon('trash'), 'Excluir card') : null,
     h('div', { class: 'side-info muted' },
       h('div', {}, `Card #${card.id}`),
       h('div', {}, `Criado em ${fmtDateTime(card.created_at)}`),

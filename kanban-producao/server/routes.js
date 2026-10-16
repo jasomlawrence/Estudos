@@ -4,7 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const express = require('express');
 const multer = require('multer');
-const { q, getSetting, setSetting, now, UPLOAD_DIR } = require('./db');
+const { q, getSetting, setSetting, now, UPLOAD_DIR, DEFAULT_BACKGROUND, DEFAULT_COLUMN_COLOR } = require('./db');
 const auth = require('./auth');
 const events = require('./events');
 const cards = require('./cards');
@@ -96,17 +96,17 @@ router.patch('/users/:id', auth.requireAdmin, (req, res) => {
 
 // ---------------- Quadros ----------------
 function seedBoard(userId) {
-  const info = q.run('INSERT INTO boards (name) VALUES (?)', 'Produção de Anéis de Noivado');
+  const info = q.run('INSERT INTO boards (name, background) VALUES (?, ?)', 'Produção de Anéis de Noivado', DEFAULT_BACKGROUND);
   const boardId = Number(info.lastInsertRowid);
-  const cols = [['Novos pedidos', '#cfe2ff'], ['Design / CAD', '#e2d9f3'], ['Fundição', '#ffe5d0'], ['Cravação', '#fff3cd'], ['Polimento', '#d1ecf1'], ['Controle de qualidade', '#f8d7da'], ['Pronto para envio', '#d1e7dd']];
+  const cols = [['Novos pedidos', '#cde7ff'], ['Design / CAD', '#dcd3ff'], ['Fundição', '#ffe5b4'], ['Cravação', '#fff3b0'], ['Polimento', '#c7f0ec'], ['Controle de qualidade', '#ffd6e0'], ['Pronto para envio', '#d4f8d4']];
   const colIds = cols.map(([name, color], i) => Number(q.run('INSERT INTO columns (board_id, name, color, position) VALUES (?, ?, ?, ?)', boardId, name, color, (i + 1) * 1024).lastInsertRowid));
   q.run('UPDATE boards SET cycle_start_column_id = ?, cycle_end_column_id = ? WHERE id = ?', colIds[1], colIds[colIds.length - 1], boardId);
-  for (const [name, color] of [['Urgente', '#e5484d'], ['Ouro amarelo', '#d4a72c'], ['Ouro branco', '#a0aec0'], ['Gravação', '#7c66dc']]) {
+  for (const [name, color] of [['Urgente', '#ff8f9e'], ['Ouro amarelo', '#ffd166'], ['Ouro branco', '#cbd5e1'], ['Gravação', '#b8a6ff']]) {
     q.run('INSERT INTO labels (board_id, name, color) VALUES (?, ?, ?)', boardId, name, color);
   }
   const fields = [
     ['Cliente', 'text', [], 1], ['Pedido Shopify', 'text', [], 1], ['Tamanho do aro', 'number', [], 1],
-    ['Metal', 'select', [{ id: 'o1', label: 'Ouro amarelo 18k', color: '#d4a72c' }, { id: 'o2', label: 'Ouro branco 18k', color: '#a0aec0' }, { id: 'o3', label: 'Ouro rosé 18k', color: '#e8a598' }, { id: 'o4', label: 'Platina', color: '#8e9aaf' }], 1],
+    ['Metal', 'select', [{ id: 'o1', label: 'Ouro amarelo 18k', color: '#ffe08a' }, { id: 'o2', label: 'Ouro branco 18k', color: '#e2e8f0' }, { id: 'o3', label: 'Ouro rosé 18k', color: '#ffd0c2' }, { id: 'o4', label: 'Platina', color: '#d5dcea' }], 1],
     ['Pedra', 'text', [], 0], ['Gravação', 'text', [], 0], ['Valor', 'currency', [], 0], ['Telefone', 'phone', [], 0], ['E-mail', 'email', [], 0],
   ];
   fields.forEach(([name, type, options, show], i) => q.run('INSERT INTO field_defs (board_id, name, type, options, position, show_on_card) VALUES (?, ?, ?, ?, ?, ?)', boardId, name, type, JSON.stringify(options), (i + 1) * 1024, show));
@@ -124,8 +124,8 @@ router.get('/boards', (req, res) => res.json(q.all('SELECT id, name, background 
 
 router.post('/boards', auth.requireAdmin, (req, res) => {
   const name = String(req.body.name || '').trim() || 'Novo quadro';
-  const id = Number(q.run('INSERT INTO boards (name) VALUES (?)', name).lastInsertRowid);
-  ['A fazer', 'Fazendo', 'Concluído'].forEach((n, i) => q.run('INSERT INTO columns (board_id, name, position) VALUES (?, ?, ?)', id, n, (i + 1) * 1024));
+  const id = Number(q.run('INSERT INTO boards (name, background) VALUES (?, ?)', name, DEFAULT_BACKGROUND).lastInsertRowid);
+  [['A fazer', '#cde7ff'], ['Fazendo', '#fff3b0'], ['Concluído', '#d4f8d4']].forEach(([n, color], i) => q.run('INSERT INTO columns (board_id, name, color, position) VALUES (?, ?, ?, ?)', id, n, color, (i + 1) * 1024));
   logActivity(id, null, req.user.id, 'board.created', { name });
   res.json({ id });
 });
@@ -175,7 +175,7 @@ router.patch('/boards/:id', (req, res) => {
   const board = boardOr404(req.params.id);
   const { name, background, cycle_start_column_id, cycle_end_column_id } = req.body;
   if (name !== undefined) q.run('UPDATE boards SET name = ? WHERE id = ?', String(name).trim() || board.name, board.id);
-  if (background !== undefined) q.run('UPDATE boards SET background = ? WHERE id = ?', background, board.id);
+  if (background !== undefined && /^(#[0-9a-f]{6}|g:[a-z-]+)$/i.test(background)) q.run('UPDATE boards SET background = ? WHERE id = ?', background, board.id);
   if (cycle_start_column_id !== undefined || cycle_end_column_id !== undefined) {
     if (req.user.role !== 'admin') throw httpError(403, 'Apenas administradores alteram o cronômetro de produção.');
     q.run('UPDATE boards SET cycle_start_column_id = ?, cycle_end_column_id = ? WHERE id = ?',
@@ -202,7 +202,7 @@ router.post('/boards/:id/columns', (req, res) => {
   const board = boardOr404(req.params.id);
   const max = q.get('SELECT MAX(position) AS p FROM columns WHERE board_id = ?', board.id).p ?? 0;
   const name = String(req.body.name || '').trim() || 'Nova coluna';
-  const info = q.run('INSERT INTO columns (board_id, name, color, position) VALUES (?, ?, ?, ?)', board.id, name, req.body.color || '#ebecf0', max + 1024);
+  const info = q.run('INSERT INTO columns (board_id, name, color, position) VALUES (?, ?, ?, ?)', board.id, name, req.body.color || DEFAULT_COLUMN_COLOR, max + 1024);
   logActivity(board.id, null, req.user.id, 'column.created', { name });
   events.boardChanged(board.id, req.user.id);
   res.json(q.get('SELECT * FROM columns WHERE id = ?', info.lastInsertRowid));
