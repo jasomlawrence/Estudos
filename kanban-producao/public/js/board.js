@@ -1,12 +1,27 @@
 // Quadro Kanban: colunas, cards, arrastar e soltar, rolagem infinita
 import { h, $, $$, clear, textColorFor, fmtShortDate, fmtDuration, avatar, fieldText, colorPicker, icon, backgroundCss } from './util.js';
 import { get, post, patch, del, attempt, popover, confirmDialog, toast } from './api.js';
-import { state, canEdit, userById, labelById, columnById } from './state.js';
+import { state, canEdit, userById, labelById, columnById, markLocalEdit } from './state.js';
 import { openCard } from './card.js';
 
 /* global Sortable */
 
 let sortables = [];
+
+// Opções de arraste pensadas para toque (tablet/celular) e mouse:
+// - forceFallback: o próprio Sortable desenha o card arrastado (mais fluido que o arraste nativo do navegador)
+// - touchStartThreshold: pequenos tremores do dedo durante a espera não cancelam o arraste
+export const DRAG_OPTIONS = {
+  forceFallback: true,
+  fallbackOnBody: true,
+  fallbackTolerance: 3,
+  delay: 160,
+  delayOnTouchOnly: true,
+  touchStartThreshold: 8,
+  animation: 180,
+  easing: 'cubic-bezier(.2, .8, .2, 1)',
+  onChoose: () => navigator.vibrate?.(8), // leve vibração quando o card "gruda" no dedo (Android)
+};
 // Chamados depois de cada recarga do quadro (ex.: o calendário se atualiza junto)
 export const boardLoadedHooks = [];
 
@@ -19,6 +34,7 @@ export async function loadBoard({ keepScroll = true } = {}) {
   if (state.archived) params.set('archived', '1');
   const data = await get(`/boards/${state.boardId}?${params}`);
   Object.assign(state, { board: data.board, columns: data.columns, labels: data.labels, fields: data.fields, users: data.users });
+  state.boardStale = false;
   renderBoard(keepScroll);
   boardLoadedHooks.forEach((fn) => fn());
 }
@@ -199,7 +215,7 @@ export function cardElement(card) {
     onclick: () => openCard(card.id),
     onkeydown: (e) => { if (e.key === 'Enter') openCard(card.id); },
   },
-  card.cover ? h('img', { class: 'card-cover', src: card.cover, alt: '', loading: 'lazy', draggable: false }) : null,
+  card.cover ? h('img', { class: 'card-cover', src: card.cover, alt: '', loading: 'lazy', decoding: 'async', draggable: false }) : null,
   h('div', { class: 'card-body' },
     card.labels.length ? h('div', { class: 'card-labels' }, card.labels.map(labelById).filter(Boolean).map((l) => h('span', { class: 'label', style: { background: l.color, color: textColorFor(l.color) }, title: l.name }, l.name))) : null,
     h('div', { class: 'card-title' }, card.title),
@@ -234,15 +250,15 @@ export function dueBadge(card) {
 // ---------------- Arrastar e soltar ----------------
 function setupSortables(list) {
   sortables.push(Sortable.create(list, {
-    animation: 150,
+    ...DRAG_OPTIONS,
     handle: '.column-head',
     draggable: '.column',
     filter: 'input,button',
     preventOnFilter: false,
-    delay: 150, delayOnTouchOnly: true,
-    onStart: () => { state.dragging = true; },
+    onStart: () => { state.dragging = true; document.body.classList.add('dragging'); },
     onEnd: async (evt) => {
       state.dragging = false;
+      document.body.classList.remove('dragging');
       if (evt.oldIndex !== evt.newIndex) {
         const id = evt.item.dataset.columnId;
         const prevId = evt.item.previousElementSibling?.dataset.columnId;
@@ -254,15 +270,14 @@ function setupSortables(list) {
   }));
   for (const el of $$('.cards', list)) {
     sortables.push(Sortable.create(el, {
+      ...DRAG_OPTIONS,
       group: 'cards',
-      animation: 150,
       draggable: '.card',
       filter: '.sentinel',
       ghostClass: 'card-ghost',
       chosenClass: 'card-chosen',
       dragClass: 'card-drag',
-      delay: 150, delayOnTouchOnly: true,
-      scroll: true, bubbleScroll: true, scrollSensitivity: 90,
+      scroll: true, bubbleScroll: true, scrollSensitivity: 80, scrollSpeed: 14,
       onStart: () => { state.dragging = true; document.body.classList.add('dragging'); },
       onEnd: async (evt) => {
         state.dragging = false;
@@ -281,8 +296,14 @@ function setupSortables(list) {
         fromCol.cards = fromCol.cards.filter((c) => c.id !== id);
         toCol.cards.splice(Math.min(evt.newIndex, toCol.cards.length), 0, { ...card, column_id: columnId });
         updateCounts();
-        await attempt(() => post(`/cards/${id}/move`, { columnId, prevId: prevId ? Number(prevId) : null, nextId: nextId ? Number(nextId) : null }));
-        state.pendingReload = true;
+        markLocalEdit(id);
+        const updated = await attempt(() => post(`/cards/${id}/move`, { columnId, prevId: prevId ? Number(prevId) : null, nextId: nextId ? Number(nextId) : null }));
+        if (updated) {
+          // Troca só o card movido (cronômetro, prazo concluído…) em vez de redesenhar o quadro
+          const idx = toCol.cards.findIndex((c) => c.id === id);
+          if (idx >= 0) toCol.cards[idx] = updated;
+          if (evt.item.isConnected) evt.item.replaceWith(cardElement(updated));
+        } else state.pendingReload = true; // deu erro: recarrega para mostrar o estado real
         afterDrag();
       },
     }));

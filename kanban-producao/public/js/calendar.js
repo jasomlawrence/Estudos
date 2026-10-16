@@ -1,9 +1,9 @@
 // Visualização em calendário: cards distribuídos pela data escolhida (prazo, criação ou campo de data)
 import { h, $, $$, clear, textColorFor, avatar, fieldText, icon } from './util.js';
 import { get, put, patch, attempt, popover, toast } from './api.js';
-import { state, canEdit, userById, labelById, columnById } from './state.js';
+import { state, canEdit, userById, labelById, columnById, markLocalEdit } from './state.js';
 import { openCard } from './card.js';
-import { reloadSoon, boardLoadedHooks } from './board.js';
+import { boardLoadedHooks, DRAG_OPTIONS, reloadSoon } from './board.js';
 
 /* global Sortable */
 
@@ -231,7 +231,7 @@ function chip(card, time) {
     onclick: () => openCard(card.id),
     onkeydown: (e) => { if (e.key === 'Enter') openCard(card.id); },
   },
-  show.has('cover') && card.cover ? h('img', { class: 'cal-chip-cover', src: card.cover, alt: '', loading: 'lazy', draggable: false }) : null,
+  show.has('cover') && card.cover ? h('img', { class: 'cal-chip-cover', src: card.cover, alt: '', loading: 'lazy', decoding: 'async', draggable: false }) : null,
   h('div', { class: 'cal-chip-line' },
     show.has('time') && time ? h('span', { class: 'cal-chip-time' }, time) : null,
     show.has('title') || (!fields.length && !show.has('column')) ? h('span', { class: 'cal-chip-title' }, card.title) : null,
@@ -255,17 +255,31 @@ function setupDrag(root, enabled) {
   if (!enabled) return;
   for (const list of $$('.cal-day-cards', root)) {
     cal.sortables.push(Sortable.create(list, {
-      group: 'calendar', sort: false, draggable: '.cal-chip', animation: 150,
-      ghostClass: 'card-ghost', delay: 150, delayOnTouchOnly: true,
-      onStart: () => { state.dragging = true; },
+      ...DRAG_OPTIONS,
+      group: 'calendar', sort: false, draggable: '.cal-chip',
+      ghostClass: 'card-ghost', dragClass: 'card-drag',
+      scroll: true, bubbleScroll: true, scrollSensitivity: 80, scrollSpeed: 14,
+      onStart: () => { state.dragging = true; document.body.classList.add('dragging'); },
       onEnd: async (evt) => {
         state.dragging = false;
+        document.body.classList.remove('dragging');
         if (evt.from === evt.to) return;
-        const card = [...cal.data.cards, ...cal.data.undated].find((c) => c.id === Number(evt.item.dataset.cardId));
-        const ok = await attempt(() => patch(`/cards/${card.id}`, datePatch(card, evt.to.dataset.date || null)));
-        if (ok) toast(evt.to.dataset.date ? `${dateLabel()} alterado` : `${dateLabel()} removido`, 'ok');
-        state.pendingReload = false;
-        reloadSoon(); // recarrega quadro e calendário
+        const id = Number(evt.item.dataset.cardId);
+        const card = [...cal.data.cards, ...cal.data.undated].find((c) => c.id === id);
+        const date = evt.to.dataset.date || null;
+        markLocalEdit(id);
+        const updated = await attempt(() => patch(`/cards/${id}`, datePatch(card, date)));
+        if (!updated) return loadCalendar(); // deu erro: volta ao estado real
+        toast(date ? `${dateLabel()} alterado` : `${dateLabel()} removido`, 'ok');
+        // Atualiza só a memória local e redesenha o calendário, sem buscar tudo de novo
+        const wasUndated = !evt.from.dataset.date;
+        cal.data.cards = cal.data.cards.filter((c) => c.id !== id);
+        cal.data.undated = cal.data.undated.filter((c) => c.id !== id);
+        if (date) cal.data.cards.push(updated);
+        else cal.data.undated.unshift(updated);
+        cal.data.undated_total += (wasUndated ? -1 : 0) + (date ? 0 : 1);
+        state.boardStale = true; // o quadro (oculto) é atualizado quando voltar para ele
+        if (state.pendingReload) { state.pendingReload = false; reloadSoon(); } else render();
       },
     }));
   }

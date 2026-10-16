@@ -1,7 +1,7 @@
 // Inicialização: login, barra superior, tempo real, notificações
 import { h, $, clear, avatar, timeAgo, debounce, icon } from './util.js';
 import { get, post, patch, attempt, popover, toast } from './api.js';
-import { state, isAdmin } from './state.js';
+import { state, isAdmin, isOwnEcho } from './state.js';
 import { loadBoard, reloadSoon, enableDragScroll } from './board.js';
 import { openCard, refreshOpenCard } from './card.js';
 import { openSettings } from './settings.js';
@@ -78,6 +78,7 @@ function renderShell() {
     $('#calendar').hidden = view !== 'calendar';
     for (const b of viewSwitch.children) b.classList.toggle('active', b.dataset.view === view);
     if (view === 'calendar' && state.board) loadCalendar();
+    if (view === 'board' && state.boardStale) loadBoard();
   };
   const viewSwitch = h('div', { class: 'view-switch', role: 'tablist' },
     h('button', { dataset: { view: 'board' }, title: 'Quadro', onclick: () => setView('board') }, icon('kanban', 16), h('span', { class: 'lbl' }, 'Quadro')),
@@ -119,6 +120,7 @@ function connectEvents() {
   es.addEventListener('board', (e) => {
     const data = JSON.parse(e.data);
     if (data.boardId !== state.boardId) return;
+    if (isOwnEcho(data)) return; // a tela já mostra a alteração que este navegador acabou de fazer
     reloadSoon();
     if (data.userId !== state.user.id) refreshOpenCard(data.cardIds);
   });
