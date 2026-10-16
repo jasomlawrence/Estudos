@@ -14,7 +14,7 @@ export function openSettings(tab = 'board') {
   const m = modal({ title: 'Configurações', wide: true, className: 'settings-modal', onClose: () => loadBoard() });
   const tabs = [
     ['board', 'Quadro'], ['fields', 'Campos do card'], ['labels', 'Etiquetas'], ['cycle', 'Cronômetro de produção'],
-    ...(isAdmin() ? [['shopify', 'Shopify'], ['sheets', 'Google Planilhas'], ['notifications', 'Notificações'], ['users', 'Usuários']] : []),
+    ...(isAdmin() ? [['shopify', 'Shopify'], ['correios', 'Correios'], ['sheets', 'Google Planilhas'], ['notifications', 'Notificações'], ['users', 'Usuários']] : []),
     ['account', 'Minha conta'],
   ];
   const nav = h('nav', { class: 'tabs' });
@@ -211,6 +211,70 @@ const PANELS = {
             await saveCfg();
             if (await attempt(() => post('/integrations/shopify/register-webhook', { public_url: publicUrl.value }))) toast('Webhook registrado no Shopify', 'ok');
           } }, 'Registrar webhook automaticamente'))));
+  },
+
+  // ---------------- Correios ----------------
+  async correios(panel) {
+    const c = await get('/integrations/correios');
+    const f = {
+      enabled: h('input', { type: 'checkbox', checked: c.enabled }),
+      environment: h('select', {}, [['producao', 'Produção'], ['homologacao', 'Homologação (testes)']].map(([v, l]) => h('option', { value: v, selected: v === c.environment }, l))),
+      usuario: h('input', { value: c.usuario, placeholder: 'Usuário do Meu Correios / CNPJ', autocomplete: 'off' }),
+      codigo_acesso: h('input', { value: c.codigo_acesso, placeholder: 'Código de acesso às APIs (gerado no CWS)', autocomplete: 'off' }),
+      cartao: h('input', { value: c.cartao, placeholder: 'Número do cartão de postagem', inputMode: 'numeric' }),
+      contrato: h('input', { value: c.contrato, placeholder: 'Opcional', inputMode: 'numeric' }),
+      cep_origem: h('input', { value: c.cep_origem, placeholder: 'CEP de onde as peças são postadas', inputMode: 'numeric' }),
+      servico: h('select', {}, c.services.map((s) => h('option', { value: s.code, selected: s.code === c.servico }, `${s.label} — ${s.code}`)),
+        c.services.some((s) => s.code === c.servico) ? null : h('option', { value: c.servico, selected: true }, c.servico)),
+      promised_source: h('select', {},
+        [['auto', 'Procurar em todo o pedido (personalização, atributos e observação)'], ['property', 'Só na personalização do produto'], ['attribute', 'Só nos atributos do pedido'], ['days', 'X dias depois do pedido']]
+          .map(([v, l]) => h('option', { value: v, selected: v === c.promised_source }, l))),
+      promised_name: h('input', { value: c.promised_name, placeholder: 'Ex.: Data estimada de entrega' }),
+      promised_days: h('input', { type: 'number', min: 0, value: c.promised_days }),
+      margem_dias: h('input', { type: 'number', min: 0, value: c.margem_dias }),
+      hora_postagem: h('input', { type: 'time', value: c.hora_postagem }),
+    };
+    const nameRow = h('label', { class: 'form-row' }, 'Nome do campo com a data', f.promised_name);
+    const daysRow = h('label', { class: 'form-row' }, 'Dias depois do pedido', f.promised_days);
+    const syncSource = () => { nameRow.hidden = f.promised_source.value === 'days'; daysRow.hidden = f.promised_source.value !== 'days'; };
+    f.promised_source.onchange = syncSource;
+    syncSource();
+    const collect = () => Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.type === 'checkbox' ? el.checked : el.value]));
+    const save = () => attempt(() => put('/integrations/correios', collect()), 'Configuração dos Correios salva');
+    const testZip = h('input', { placeholder: 'CEP de destino', inputMode: 'numeric', style: { width: '140px' } });
+    const testDate = h('input', { type: 'date' });
+    const result = h('p', { class: 'callout', hidden: true });
+    clear(panel,
+      h('h3', {}, 'Prazo automático pelos Correios'),
+      h('p', { class: 'muted' }, 'Quando um pedido chega do Shopify, o sistema consulta o prazo dos Correios até o CEP do cliente e define o prazo do card como: data de entrega prometida − prazo dos Correios − folga. Fins de semana e feriados nacionais não contam.'),
+      h('label', { class: 'check' }, f.enabled, ' Integração ativa'),
+      h('fieldset', {}, h('legend', {}, '1. Acesso à API (contrato)'),
+        h('label', { class: 'form-row' }, 'Ambiente', f.environment),
+        h('label', { class: 'form-row' }, 'Usuário', f.usuario),
+        h('label', { class: 'form-row' }, 'Código de acesso', f.codigo_acesso),
+        h('label', { class: 'form-row' }, 'Cartão de postagem', f.cartao),
+        h('label', { class: 'form-row' }, 'Contrato', f.contrato),
+        h('p', { class: 'muted small' }, 'O código de acesso é gerado em cws.correios.com.br → "Gestão de acesso a API\'s" (não é a senha do site). O contrato precisa ter o serviço 38210 – API PRAZOS liberado; se não tiver, peça ao seu consultor dos Correios.')),
+      h('fieldset', {}, h('legend', {}, '2. Envio'),
+        h('label', { class: 'form-row' }, 'CEP de origem', f.cep_origem),
+        h('label', { class: 'form-row' }, 'Serviço', f.servico),
+        h('label', { class: 'form-row' }, 'Folga extra (dias úteis)', f.margem_dias),
+        h('label', { class: 'form-row' }, 'Horário limite de postagem', f.hora_postagem)),
+      h('fieldset', {}, h('legend', {}, '3. Onde está a data de entrega prometida'),
+        h('label', { class: 'form-row' }, 'Origem da data', f.promised_source),
+        nameRow, daysRow,
+        h('p', { class: 'muted small' }, `Aceita datas como 25/12/2026, 25/12, 2026-12-25, "25 de dezembro" ou "25 de dez."; num intervalo ("20/11 a 25/11") usa a primeira data. Se a data não for encontrada ou os Correios não responderem, o card usa o prazo padrão do Shopify e a descrição explica o motivo.`)),
+      h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: save }, 'Salvar')),
+      h('fieldset', {}, h('legend', {}, 'Testar'),
+        h('div', { class: 'row wrap' }, testZip, h('span', { class: 'muted small' }, 'entrega prometida (opcional)'), testDate,
+          h('button', { class: 'btn', onclick: async () => {
+            await save();
+            const r = await attempt(() => post('/integrations/correios/test', { zip: testZip.value, promised_date: testDate.value }));
+            if (!r) return;
+            result.hidden = false;
+            result.textContent = r.summary || `Prazo dos Correios: ${r.days} dia(s) útil(eis)${r.message ? ` — ${r.message}` : ''}`;
+          } }, 'Consultar prazo')),
+        result));
   },
 
   // ---------------- Google Planilhas ----------------

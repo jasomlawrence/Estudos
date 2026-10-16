@@ -40,6 +40,8 @@ export function describe(a, { withCard = false } = {}) {
     case 'board.cycle': return `definiu o cronômetro de produção: de ${q(d.start)} até ${q(d.end)}`;
     case 'shopify.imported': return `importou o pedido ${d.order} do Shopify (${d.cards} card${d.cards > 1 ? 's' : ''})`;
     case 'integration.shopify': return 'alterou a integração com o Shopify';
+    case 'integration.correios': return 'alterou a integração com os Correios';
+    case 'card.correios': return `calculou o prazo pelos Correios${card}: ${d.summary}`;
     case 'integration.sheets': return 'alterou a integração com o Google Planilhas';
     case 'user.created': return `cadastrou o usuário ${d.name} (${d.role})`;
     case 'user.updated': return `alterou o usuário ${d.name}`;

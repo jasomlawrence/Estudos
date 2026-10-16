@@ -33,7 +33,7 @@ export async function loadBoard({ keepScroll = true } = {}) {
   if (state.search) params.set('q', state.search);
   if (state.archived) params.set('archived', '1');
   const data = await get(`/boards/${state.boardId}?${params}`);
-  Object.assign(state, { board: data.board, columns: data.columns, labels: data.labels, fields: data.fields, users: data.users });
+  Object.assign(state, { board: data.board, columns: data.columns, labels: data.labels, fields: data.fields, users: data.users, correiosEnabled: data.correios_enabled });
   state.boardStale = false;
   renderBoard(keepScroll);
   boardLoadedHooks.forEach((fn) => fn());

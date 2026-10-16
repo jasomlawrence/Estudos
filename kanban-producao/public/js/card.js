@@ -78,6 +78,7 @@ function render() {
           h('h3', {}, 'Descrição'),
           h('textarea', { class: 'description', rows: 4, placeholder: 'Detalhes, observações da produção…', value: card.description, readOnly: !editable, dataset: { key: 'description' }, onchange: (e) => save({ description: e.target.value }) })),
         attachmentsSection(card, editable),
+        state.correiosEnabled || card.shipping_zip ? shippingSection(card, editable) : null,
         productionSection(card),
         h('section', {},
           h('h3', {}, 'Histórico de alterações'),
@@ -281,6 +282,32 @@ function attachmentsSection(card, editable) {
 }
 
 // ---------- Tempo de produção ----------
+// ---------- Envio pelos Correios ----------
+const fmtDay = (iso) => (iso ? iso.split('-').reverse().join('/') : '—');
+const SERVICE_NAMES = { '03220': 'SEDEX', '03298': 'PAC', '03140': 'SEDEX 12', '03158': 'SEDEX 10' };
+
+function shippingSection(card, editable) {
+  const zip = h('input', { value: card.shipping_zip ? card.shipping_zip.replace(/^(\d{5})(\d{3})$/, '$1-$2') : '', placeholder: '00000-000', inputMode: 'numeric', dataset: { key: 'zip' }, readOnly: !editable });
+  const promised = h('input', { type: 'date', value: card.promised_date || '', dataset: { key: 'promised' }, readOnly: !editable });
+  const posting = card.due_date && card.correios_days != null ? card.due_date : null;
+  const late = posting && !card.cycle_ended_at && Date.parse(posting) < Date.now();
+  return h('section', { class: 'shipping' },
+    h('h3', {}, 'Envio (Correios)'),
+    h('div', { class: 'stats-row' },
+      stat('Entrega prometida ao cliente', fmtDay(card.promised_date)),
+      stat('Prazo dos Correios', card.correios_days != null ? `${SERVICE_NAMES[card.correios_service] || card.correios_service || ''} · ${card.correios_days} dia(s) útil(eis)` : '—'),
+      stat('Postar até', posting ? fmtDateTime(posting) : '—', posting ? (late ? 'late' : 'ok') : '')),
+    editable && state.correiosEnabled ? h('div', { class: 'row wrap shipping-form' },
+      h('label', { class: 'field' }, h('span', { class: 'field-name' }, 'CEP de entrega'), zip),
+      h('label', { class: 'field' }, h('span', { class: 'field-name' }, 'Entrega prometida'), promised),
+      h('button', { class: 'btn', onclick: async (e) => {
+        e.currentTarget.disabled = true;
+        const r = await attempt(() => post(`/cards/${card.id}/correios`, { zip: zip.value, promised_date: promised.value }));
+        if (r) { toast(`Postar até ${fmtDay(r.posting)} (${r.days} dia(s) úteis dos Correios)`, 'ok'); current.card = r.card; render(); reloadSoon(); }
+        else e.currentTarget.disabled = false;
+      } }, icon('restore'), 'Calcular prazo pelos Correios')) : null);
+}
+
 function productionSection(card) {
   const started = card.cycle_started_at;
   const ended = card.cycle_ended_at;

@@ -11,6 +11,7 @@ const cards = require('./cards');
 const shopify = require('./shopify');
 const sheets = require('./sheets');
 const notifications = require('./notifications');
+const correios = require('./correios');
 const { cycleMs, stats, columnDurations, resolveCycleColumns } = require('./cycle');
 
 const router = express.Router();
@@ -156,6 +157,7 @@ router.get('/boards/:id', (req, res) => {
     labels: q.all('SELECT * FROM labels WHERE board_id = ? ORDER BY id', board.id),
     fields: cards.fieldDefs(board.id),
     users: q.all('SELECT * FROM users WHERE active = 1 ORDER BY name').map(auth.publicUser),
+    correios_enabled: !!correios.getConfig().enabled,
   });
 });
 
@@ -407,6 +409,24 @@ router.delete('/cards/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Recalcula o prazo do card pelos Correios (CEP e data prometida podem ser corrigidos aqui)
+router.post('/cards/:id/correios', wrap(async (req, res) => {
+  const card = q.get('SELECT * FROM cards WHERE id = ?', req.params.id);
+  if (!card) throw httpError(404, 'Card não encontrado.');
+  const config = correios.getConfig();
+  if (!config.enabled) throw httpError(400, 'A integração com os Correios está desligada.');
+  const zip = correios.onlyDigits(req.body.zip ?? card.shipping_zip);
+  const promised = req.body.promised_date ? correios.parseDate(req.body.promised_date) : card.promised_date;
+  if (!promised) throw httpError(400, 'Informe a data de entrega prometida ao cliente.');
+  let r;
+  try { r = await correios.deadline({ zip, promised }, config); } catch (err) { throw httpError(400, err.message); }
+  q.run('UPDATE cards SET shipping_zip = ?, promised_date = ?, correios_days = ?, correios_service = ? WHERE id = ?', zip, promised, r.days, r.service, card.id);
+  logActivity(card.board_id, card.id, req.user.id, 'card.correios', { summary: r.summary });
+  if (req.body.apply !== false) cards.updateCard(card.id, { due_date: r.dueDate }, req.user.id);
+  else events.boardChanged(card.board_id, req.user.id, card.id);
+  res.json({ ...r, card: cards.cardDetail(card.id) });
+}));
+
 router.post('/cards/:id/notify', wrap(async (req, res) => {
   const card = q.get('SELECT * FROM cards WHERE id = ?', req.params.id);
   if (!card) throw httpError(404, 'Card não encontrado.');
@@ -543,6 +563,36 @@ router.post('/integrations/shopify/register-webhook', auth.requireAdmin, wrap(as
 router.post('/integrations/shopify/test', auth.requireAdmin, wrap(async (req, res) => {
   const data = await shopify.graphql(shopify.getConfig(), '{ shop { name myshopifyDomain } }');
   res.json(data.shop);
+}));
+
+router.get('/integrations/correios', auth.requireAdmin, (req, res) => {
+  const c = correios.getConfig();
+  res.json({ ...c, codigo_acesso: mask(c.codigo_acesso), services: correios.SERVICES });
+});
+
+router.put('/integrations/correios', auth.requireAdmin, (req, res) => {
+  const current = correios.getConfig();
+  const next = { ...current, ...req.body };
+  delete next.services;
+  if (isMasked(next.codigo_acesso)) next.codigo_acesso = current.codigo_acesso;
+  if (!['producao', 'homologacao'].includes(next.environment)) next.environment = 'producao';
+  if (!['auto', 'property', 'attribute', 'days'].includes(next.promised_source)) next.promised_source = 'auto';
+  next.cep_origem = correios.onlyDigits(next.cep_origem);
+  next.servico = String(next.servico || '03220').replace(/[^\w]/g, '');
+  next.margem_dias = Math.max(0, Number(next.margem_dias) || 0);
+  next.promised_days = Math.max(0, Number(next.promised_days) || 0);
+  setSetting('correios', next);
+  logActivity(null, null, req.user.id, 'integration.correios', {});
+  res.json({ ok: true });
+});
+
+router.post('/integrations/correios/test', auth.requireAdmin, wrap(async (req, res) => {
+  try {
+    const config = correios.getConfig();
+    const r = await correios.quote(req.body.zip, config);
+    const promised = correios.parseDate(req.body.promised_date);
+    res.json({ ...r, ...(promised ? await correios.deadline({ zip: req.body.zip, promised }, config) : {}) });
+  } catch (err) { throw httpError(400, err.message); }
 }));
 
 router.get('/integrations/sheets/:boardId', auth.requireAdmin, (req, res) => {

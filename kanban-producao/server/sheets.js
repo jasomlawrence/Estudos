@@ -21,6 +21,9 @@ const BUILTIN_COLUMNS = [
   { key: 'description', label: 'Descrição' },
   { key: 'source', label: 'Origem' },
   { key: 'shopify_url', label: 'Link do pedido no Shopify' },
+  { key: 'shipping_zip', label: 'CEP de entrega' },
+  { key: 'promised_date', label: 'Entrega prometida ao cliente' },
+  { key: 'correios_days', label: 'Prazo dos Correios (dias úteis)' },
   { key: 'archived', label: 'Arquivado' },
 ];
 
@@ -128,6 +131,9 @@ function rowsForCards(boardId, config, cardIds) {
         case 'source': return card.source === 'shopify' ? 'Shopify' : 'Manual';
         case 'shopify_url': return card.external_url || '';
         case 'archived': return card.archived ? 'Sim' : 'Não';
+        case 'shipping_zip': return card.shipping_zip || '';
+        case 'promised_date': return card.promised_date ? card.promised_date.split('-').reverse().join('/') : '';
+        case 'correios_days': return card.correios_days ?? '';
         default: return '';
       }
     });
