@@ -55,12 +55,20 @@ O Shopify precisa enviar os pedidos para um endereço público com **https**. Op
 
 ## Conectando o Shopify
 
-Em **⚙ Configurações → Shopify**:
+> Desde **1º de janeiro de 2026** a Shopify não permite mais criar "apps personalizados" dentro do admin (os que davam um token `shpat_`). O app agora é criado no **Dev Dashboard** e a conexão usa **Client ID + Client secret**: o sistema troca essas credenciais por um token que vale 24 horas e renova sozinho.
 
-1. **Pelo painel do Shopify (mais simples):** Configurações → Notificações → Webhooks → *Criar webhook* → evento **Criação de pedido**, formato **JSON**, URL = o "Endereço do webhook" mostrado no sistema (`https://seu-dominio/webhooks/shopify/orders`). Copie a chave que aparece em "Seus webhooks serão assinados com…" para o campo **Chave para validar o webhook**.
-2. **Ou com app personalizado** (Configurações → Apps → Desenvolver apps), com permissões `read_orders` e `read_products`: coloque o **token da Admin API** (`shpat_…`) e a **chave secreta do app** no campo da chave, e clique em *Registrar webhook automaticamente*. Com o token você também pode **importar pedidos antigos** (últimos N dias) e filtrar por **tags** de produto.
-3. Defina as **palavras‑chave** (padrão: "anel de noivado, noivado, solitário"), a **coluna de entrada**, o **prazo** (dias após o pedido) e **qual dado do pedido preenche cada campo**, incluindo personalizações do produto como "Tamanho do aro" ou "Gravação".
-4. Marque **Integração ativa** e salve.
+Em **⚙ Configurações → Shopify** (o passo a passo também está na tela):
+
+1. No admin da Shopify, vá em **Configurações → Apps → Desenvolver apps** e abra o **Dev Dashboard** (ou acesse [dev.shopify.com](https://dev.shopify.com) com a mesma conta). Clique em **Criar app**, escolha começar pelo Dev Dashboard e dê um nome.
+2. Na aba **Versões**, crie uma versão: em *App URL* coloque o endereço do sistema (ex.: `https://kanban-producao.onrender.com`), use a versão de webhooks **2026-10** e marque os escopos **read_orders**, **read_products** e **read_customers**. Clique em **Lançar (Release)**.
+3. Na visão geral do app, clique em **Instalar app** e escolha a sua loja.
+4. Nas configurações do app, copie o **Client ID** e o **Client secret** e cole no sistema, junto com o domínio da loja (pode colar o link do admin `admin.shopify.com/store/...`, que o sistema converte para `....myshopify.com`).
+5. Clique em **Salvar**, **Testar conexão** e **Registrar webhook**. A partir daí, cada pedido novo chega sozinho.
+6. Defina as **palavras‑chave** (padrão: "anel de noivado, noivado, solitário"), a **coluna de entrada** e **qual dado do pedido preenche cada campo**. Marque **Integração ativa** e salve.
+
+Se o nome, o endereço ou o e-mail do cliente chegarem vazios, peça no Dev Dashboard o acesso a **dados protegidos de clientes**.
+
+Ainda funcionam, em "Outras formas de conexão": o token `shpat_` de apps antigos criados no admin antes de 2026 e o webhook criado à mão em Configurações → Notificações → Webhooks (com a chave mostrada lá).
 
 ## Conectando os Correios (prazo automático)
 

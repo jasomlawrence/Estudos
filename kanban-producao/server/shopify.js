@@ -5,7 +5,10 @@ const { q, getSetting } = require('./db');
 const { createCard, logActivity } = require('./cards');
 const correios = require('./correios');
 
-const DEFAULT_API_VERSION = '2025-07';
+// Versão estável mais recente (out/2026). Versões antigas salvas são trocadas automaticamente
+// por esta, porque a Shopify desativa cada versão ~12 meses após o lançamento.
+const DEFAULT_API_VERSION = '2026-10';
+const OLDEST_SUPPORTED_VERSION = '2026-01';
 
 // Dados do pedido que podem preencher campos do card
 const SOURCES = [
@@ -31,10 +34,14 @@ const SOURCES = [
 ];
 
 function getConfig() {
+  const stored = getSetting('shopify', {});
+  if (!stored.api_version || stored.api_version < OLDEST_SUPPORTED_VERSION) stored.api_version = DEFAULT_API_VERSION;
   return {
     enabled: false,
     shop_domain: '',
     webhook_secret: '',
+    client_id: '',
+    client_secret: '',
     access_token: '',
     api_version: DEFAULT_API_VERSION,
     board_id: null,
@@ -47,7 +54,7 @@ function getConfig() {
     mapping: {},
     due_days: 30,
     label_ids: [],
-    ...getSetting('shopify', {}),
+    ...stored,
   };
 }
 
@@ -109,8 +116,8 @@ function normalizeGraphqlOrder(o, shopDomain) {
     id: String(id),
     name: o.name,
     created_at: o.createdAt,
-    email: o.email || c.email || '',
-    phone: o.phone || c.phone || o.shippingAddress?.phone || '',
+    email: o.email || c.defaultEmailAddress?.emailAddress || '',
+    phone: o.phone || c.defaultPhoneNumber?.phoneNumber || o.shippingAddress?.phone || '',
     note: o.note || '',
     currency: o.currencyCode,
     total_price: o.totalPriceSet?.shopMoney?.amount,
@@ -224,7 +231,7 @@ function buildCards(order, config, productInfo = {}) {
 async function importOrder(order, config = getConfig(), userId = null) {
   if (!config.board_id || !config.column_id) throw new Error('Escolha o quadro e a coluna de entrada nas configurações do Shopify.');
   let productInfo = {};
-  if (splitList(config.tags).length && config.access_token) {
+  if (splitList(config.tags).length && hasApiAccess(config)) {
     const ids = [...new Set(order.line_items.filter((li) => li.product_id && !li.product_tags).map((li) => li.product_id))];
     if (ids.length) productInfo = await fetchProductInfo(config, ids).catch(() => ({}));
   }
@@ -266,11 +273,54 @@ async function applyCorreios(data, order, config, correiosConfig) {
   }
 }
 
+// ---------------- Acesso à Admin API ----------------
+// Desde 01/01/2026 a Shopify não deixa mais criar "apps personalizados" no admin (que davam o token shpat_).
+// Apps novos são criados no Dev Dashboard e o sistema troca Client ID + Client secret por um token
+// que vale 24 h (client credentials grant). O token shpat_ antigo continua aceito para apps já existentes.
+const tokenCache = new Map();
+
+/**
+ * Aceita "minhaloja", "minhaloja.myshopify.com", o link do admin (admin.shopify.com/store/minhaloja)
+ * ou uma URL completa, e devolve sempre "minhaloja.myshopify.com" — o único endereço aceito pela API.
+ */
+function normalizeShopDomain(input) {
+  const s = String(input || '').trim().toLowerCase();
+  const admin = /admin\.shopify\.com\/store\/([a-z0-9-]+)/.exec(s);
+  if (admin) return `${admin[1]}.myshopify.com`;
+  const host = s.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  if (!host) return '';
+  return host.includes('.') ? host : `${host}.myshopify.com`;
+}
+
+const hasApiAccess = (config) => !!(config.shop_domain && (config.access_token || (config.client_id && config.client_secret)));
+
+async function accessToken(config) {
+  if (config.access_token) return config.access_token;
+  if (!config.client_id || !config.client_secret) throw new Error('Informe o Client ID e o Client secret do app criado no Dev Dashboard da Shopify.');
+  const key = `${config.shop_domain}:${config.client_id}`;
+  const cached = tokenCache.get(key);
+  if (cached && cached.exp > Date.now() + 5 * 60000) return cached.token;
+  const res = await fetch(`https://${config.shop_domain}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: config.client_id, client_secret: config.client_secret }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.access_token) {
+    const reason = body.error_description || body.error || `erro ${res.status}`;
+    if (/shop_not_permitted/.test(reason)) throw new Error('A Shopify não permitiu o acesso: o app precisa ser criado no Dev Dashboard da mesma organização da loja e estar instalado nela.');
+    if (/application_cannot_be_found|invalid_client/.test(reason)) throw new Error('Client ID ou Client secret incorretos (copie de novo em Dev Dashboard → seu app → Configurações).');
+    throw new Error(`A Shopify recusou o acesso: ${reason}. Confira se o app está instalado na loja e se o domínio é o .myshopify.com.`);
+  }
+  tokenCache.set(key, { token: body.access_token, exp: Date.now() + Number(body.expires_in || 86399) * 1000 });
+  return body.access_token;
+}
+
 async function graphql(config, query, variables = {}) {
-  if (!config.shop_domain || !config.access_token) throw new Error('Informe o domínio da loja e o token de acesso da Admin API.');
+  if (!hasApiAccess(config)) throw new Error('Informe o domínio da loja e o Client ID + Client secret do app (ou o token shpat_ de um app antigo).');
   const res = await fetch(`https://${config.shop_domain}/admin/api/${config.api_version || DEFAULT_API_VERSION}/graphql.json`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': config.access_token },
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': await accessToken(config) },
     body: JSON.stringify({ query, variables }),
   });
   const body = await res.json().catch(() => ({}));
@@ -282,7 +332,7 @@ const ORDER_FIELDS = `
   id legacyResourceId name createdAt note email phone currencyCode displayFinancialStatus
   customAttributes { key value }
   totalPriceSet { shopMoney { amount } }
-  customer { firstName lastName email phone }
+  customer { firstName lastName defaultEmailAddress { emailAddress } defaultPhoneNumber { phoneNumber } }
   shippingAddress { name address1 address2 city province provinceCode zip country phone }
   lineItems(first: 50) { nodes {
     id title variantTitle sku vendor quantity
@@ -315,8 +365,9 @@ async function fetchProductInfo(config, productIds) {
 }
 
 async function registerWebhook(config, callbackUrl) {
-  const data = await graphql(config, `mutation($url: URL!) {
-    webhookSubscriptionCreate(topic: ORDERS_CREATE, webhookSubscription: { callbackUrl: $url, format: JSON }) {
+  // Na API atual o endereço vai no campo `uri` (o antigo `callbackUrl` foi removido)
+  const data = await graphql(config, `mutation($url: String!) {
+    webhookSubscriptionCreate(topic: ORDERS_CREATE, webhookSubscription: { uri: $url, format: JSON }) {
       webhookSubscription { id }
       userErrors { field message }
     } }`, { url: callbackUrl });
@@ -327,5 +378,5 @@ async function registerWebhook(config, callbackUrl) {
 
 module.exports = {
   SOURCES, getConfig, verifyHmac, normalizeRestOrder, normalizeGraphqlOrder, matchLineItem, buildCards,
-  importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate,
+  importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, DEFAULT_API_VERSION,
 };

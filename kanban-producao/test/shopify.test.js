@@ -61,6 +61,10 @@ test('webhook assinado cria o card uma única vez', async () => {
   const hmac = crypto.createHmac('sha256', 'segredo').update(body).digest('base64');
   const send = (sig) => fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'application/json', 'X-Shopify-Hmac-Sha256': sig, 'X-Shopify-Topic': 'orders/create' } });
   assert.strictEqual((await send('invalida')).status, 401);
+  // webhook registrado pelo app vem assinado com o Client secret
+  setSetting('shopify', { ...require('../server/db').getSetting('shopify'), client_secret: 'segredo-do-app' });
+  const appSig = crypto.createHmac('sha256', 'segredo-do-app').update(body).digest('base64');
+  assert.strictEqual((await send(appSig)).status, 200);
   assert.strictEqual((await send(hmac)).status, 200);
   assert.strictEqual((await send(hmac)).status, 200); // reenvio do Shopify
   await new Promise((r) => setTimeout(r, 300));
@@ -72,4 +76,45 @@ test('webhook assinado cria o card uma única vez', async () => {
   const value = q.get('SELECT value FROM card_field_values WHERE card_id = ? AND field_id = ?', cards[0].id, field.id);
   assert.strictEqual(JSON.parse(value.value), 15);
   assert.ok(q.get("SELECT 1 FROM activity WHERE action = 'shopify.imported'"));
+});
+
+test('conecta com Client ID/secret (app do Dev Dashboard) e registra o webhook com "uri"', async () => {
+  const { setSetting } = require('../server/db');
+  const calls = [];
+  global.fetch = async (url, opts = {}) => {
+    calls.push({ url: String(url), opts });
+    const json = (status, data) => ({ ok: status < 300, status, json: async () => data });
+    if (String(url).endsWith('/admin/oauth/access_token')) {
+      const body = new URLSearchParams(opts.body);
+      assert.strictEqual(body.get('grant_type'), 'client_credentials');
+      assert.strictEqual(body.get('client_id'), 'cid');
+      assert.strictEqual(body.get('client_secret'), 'csecret');
+      return json(200, { access_token: 'tok-24h', scope: 'read_orders', expires_in: 86399 });
+    }
+    assert.strictEqual(opts.headers['X-Shopify-Access-Token'], 'tok-24h');
+    const { query, variables } = JSON.parse(opts.body);
+    if (query.includes('webhookSubscriptionCreate')) {
+      assert.match(query, /uri: \$url/);
+      assert.doesNotMatch(query, /callbackUrl/);
+      assert.strictEqual(variables.url, 'https://kanban.exemplo.com/webhooks/shopify/orders');
+      return json(200, { data: { webhookSubscriptionCreate: { webhookSubscription: { id: 'gid://shopify/WebhookSubscription/1' }, userErrors: [] } } });
+    }
+    return json(200, { data: { shop: { name: 'Ateliê', myshopifyDomain: 'atelie.myshopify.com' } } });
+  };
+  // versão antiga salva é atualizada automaticamente
+  setSetting('shopify', { shop_domain: 'atelie.myshopify.com', client_id: 'cid', client_secret: 'csecret', api_version: '2025-07' });
+  const config = shopify.getConfig();
+  assert.strictEqual(config.api_version, '2026-10');
+  const shop = await shopify.graphql(config, '{ shop { name myshopifyDomain } }');
+  assert.strictEqual(shop.shop.name, 'Ateliê');
+  assert.ok(calls[1].url.includes('/admin/api/2026-10/graphql.json'));
+  await shopify.registerWebhook(config, 'https://kanban.exemplo.com/webhooks/shopify/orders');
+  // o token é reaproveitado (só uma troca de credenciais)
+  assert.strictEqual(calls.filter((c) => c.url.endsWith('/admin/oauth/access_token')).length, 1);
+});
+
+test('normaliza o domínio da loja', () => {
+  assert.strictEqual(shopify.normalizeShopDomain('https://admin.shopify.com/store/atelie-joias/orders'), 'atelie-joias.myshopify.com');
+  assert.strictEqual(shopify.normalizeShopDomain('Atelie-Joias'), 'atelie-joias.myshopify.com');
+  assert.strictEqual(shopify.normalizeShopDomain('https://atelie-joias.myshopify.com/admin'), 'atelie-joias.myshopify.com');
 });

@@ -531,15 +531,17 @@ const isMasked = (s) => typeof s === 'string' && s.startsWith('•••••�
 
 router.get('/integrations/shopify', auth.requireAdmin, (req, res) => {
   const c = shopify.getConfig();
-  res.json({ ...c, webhook_secret: mask(c.webhook_secret), access_token: mask(c.access_token), sources: shopify.SOURCES, webhook_path: '/webhooks/shopify/orders' });
+  res.json({ ...c, webhook_secret: mask(c.webhook_secret), access_token: mask(c.access_token), client_secret: mask(c.client_secret), sources: shopify.SOURCES, webhook_path: '/webhooks/shopify/orders', default_api_version: shopify.DEFAULT_API_VERSION });
 });
 
 router.put('/integrations/shopify', auth.requireAdmin, (req, res) => {
   const current = shopify.getConfig();
   const next = { ...current, ...req.body };
   delete next.sources; delete next.webhook_path;
-  for (const k of ['webhook_secret', 'access_token']) if (isMasked(next[k])) next[k] = current[k];
-  next.shop_domain = String(next.shop_domain || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim();
+  delete next.default_api_version;
+  for (const k of ['webhook_secret', 'access_token', 'client_secret']) if (isMasked(next[k])) next[k] = current[k];
+  next.client_id = String(next.client_id || '').trim();
+  next.shop_domain = shopify.normalizeShopDomain(next.shop_domain);
   setSetting('shopify', next);
   logActivity(next.board_id, null, req.user.id, 'integration.shopify', {});
   res.json({ ok: true });
