@@ -1,7 +1,7 @@
 'use strict';
 // Integração Shopify: recebe pedidos (webhook) e transforma pedidos de anel de noivado em cards
 const crypto = require('node:crypto');
-const { q, getSetting } = require('./db');
+const { q, getSetting, setSetting } = require('./db');
 const { createCard, logActivity } = require('./cards');
 const correios = require('./correios');
 
@@ -319,24 +319,101 @@ function graphqlError(status, body) {
 
 const hasApiAccess = (config) => !!(config.shop_domain && (config.access_token || (config.client_id && config.client_secret)));
 
+/** Lê a resposta do endpoint de token, que pode vir em JSON ou em texto/HTML ("Oauth error shop_not_permitted: …") */
+async function readTokenResponse(res) {
+  const text = await res.text().catch(() => '');
+  let body = {};
+  try { body = JSON.parse(text); } catch { /* não é JSON */ }
+  const detail = body.error_description || body.error || (typeof body.errors === 'string' ? body.errors : '')
+    || text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
+  return { body, detail };
+}
+
+function tokenError(status, detail) {
+  if (/shop_not_permitted/.test(detail)) {
+    return new Error('A Shopify não liberou o acesso por Client ID/secret porque a loja não está na mesma organização do app no Dev Dashboard. Use o botão "Conectar com a Shopify" (autorização direta), que funciona nesse caso.');
+  }
+  if (/application_cannot_be_found|invalid_client|client_id/i.test(detail)) {
+    return new Error(`Client ID ou Client secret não reconhecidos pela Shopify (${detail}). Copie de novo em Dev Dashboard → seu app → Configurações.`);
+  }
+  if (/not installed|app_not_installed/i.test(detail)) {
+    return new Error('O app ainda não está instalado nesta loja. No Dev Dashboard, abra o app e clique em "Instalar app".');
+  }
+  return new Error(`A Shopify recusou o acesso (erro ${status}${detail ? `: ${detail}` : ''}).`);
+}
+
+async function requestToken(config, params) {
+  const res = await shopFetch(config, '/admin/oauth/access_token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams(params),
+  });
+  const { body, detail } = await readTokenResponse(res);
+  if (!res.ok || !body.access_token) throw tokenError(res.status, detail);
+  return body;
+}
+
+// ---------- Autorização direta (OAuth "authorization code"): funciona com qualquer loja onde o app foi aprovado ----------
+const OAUTH_SCOPES = 'read_orders,read_products,read_customers';
+
+function authorizeUrl(config, redirectUri, state) {
+  const qs = new URLSearchParams({ client_id: config.client_id, scope: OAUTH_SCOPES, redirect_uri: redirectUri, state });
+  return `https://${config.shop_domain}/admin/oauth/authorize?${qs}`;
+}
+
+/** Confere a assinatura que a Shopify coloca nos parâmetros de retorno (hmac) */
+function verifyCallback(query, secret) {
+  const { hmac, ...rest } = query;
+  if (!hmac || !secret) return false;
+  const message = Object.keys(rest).sort().map((k) => `${k}=${Array.isArray(rest[k]) ? rest[k].join(',') : rest[k]}`).join('&');
+  const digest = crypto.createHmac('sha256', secret).update(message).digest('hex');
+  return digest.length === String(hmac).length && crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(String(hmac)));
+}
+
+function saveOAuth(body) {
+  const stored = getSetting('shopify', {});
+  const oauth = {
+    access_token: body.access_token,
+    expires_at: body.expires_in ? Date.now() + Number(body.expires_in) * 1000 : null,
+    refresh_token: body.refresh_token || stored.oauth?.refresh_token || null,
+    refresh_expires_at: body.refresh_token_expires_in ? Date.now() + Number(body.refresh_token_expires_in) * 1000 : stored.oauth?.refresh_expires_at || null,
+    scope: body.scope || '',
+    connected_at: stored.oauth?.connected_at || new Date().toISOString(),
+  };
+  setSetting('shopify', { ...stored, oauth });
+  return oauth;
+}
+
+async function exchangeCode(config, code) {
+  const body = await requestToken(config, { client_id: config.client_id, client_secret: config.client_secret, code, expiring: '1' });
+  const stored = getSetting('shopify', {});
+  delete stored.oauth; // nova conexão
+  setSetting('shopify', stored);
+  const oauth = saveOAuth(body);
+  tokenCache.clear();
+  return oauth;
+}
+
 async function accessToken(config) {
-  if (config.access_token) return config.access_token;
+  if (config.access_token) return config.access_token; // app antigo criado no admin (shpat_)
   if (!config.client_id || !config.client_secret) throw new Error('Informe o Client ID e o Client secret do app criado no Dev Dashboard da Shopify.');
+
+  // 1) Autorização direta, se já foi feita (renova sozinha com o refresh token)
+  const oauth = config.oauth;
+  if (oauth?.access_token) {
+    if (!oauth.expires_at || oauth.expires_at > Date.now() + 5 * 60000) return oauth.access_token;
+    if (oauth.refresh_token && (!oauth.refresh_expires_at || oauth.refresh_expires_at > Date.now())) {
+      const body = await requestToken(config, { client_id: config.client_id, client_secret: config.client_secret, grant_type: 'refresh_token', refresh_token: oauth.refresh_token });
+      return saveOAuth(body).access_token;
+    }
+    throw new Error('A autorização da Shopify expirou. Clique em "Conectar com a Shopify" de novo.');
+  }
+
+  // 2) Client credentials (app e loja na mesma organização do Dev Dashboard)
   const key = `${config.shop_domain}:${config.client_id}`;
   const cached = tokenCache.get(key);
   if (cached && cached.exp > Date.now() + 5 * 60000) return cached.token;
-  const res = await shopFetch(config, '/admin/oauth/access_token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: config.client_id, client_secret: config.client_secret }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body.access_token) {
-    const reason = body.error_description || body.error || `erro ${res.status}`;
-    if (/shop_not_permitted/.test(reason)) throw new Error('A Shopify não permitiu o acesso: o app precisa ser criado no Dev Dashboard da mesma organização da loja e estar instalado nela.');
-    if (/application_cannot_be_found|invalid_client/.test(reason)) throw new Error('Client ID ou Client secret incorretos (copie de novo em Dev Dashboard → seu app → Configurações).');
-    throw new Error(`A Shopify recusou o acesso: ${reason}. Confira se o app está instalado na loja e se o domínio é o .myshopify.com.`);
-  }
+  const body = await requestToken(config, { grant_type: 'client_credentials', client_id: config.client_id, client_secret: config.client_secret });
   tokenCache.set(key, { token: body.access_token, exp: Date.now() + Number(body.expires_in || 86399) * 1000 });
   return body.access_token;
 }
@@ -404,5 +481,5 @@ async function registerWebhook(config, callbackUrl) {
 
 module.exports = {
   SOURCES, getConfig, verifyHmac, normalizeRestOrder, normalizeGraphqlOrder, matchLineItem, buildCards,
-  importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, DEFAULT_API_VERSION,
+  importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, DEFAULT_API_VERSION, authorizeUrl, verifyCallback, exchangeCode,
 };

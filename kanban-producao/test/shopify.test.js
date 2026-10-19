@@ -83,7 +83,7 @@ test('conecta com Client ID/secret (app do Dev Dashboard) e registra o webhook c
   const calls = [];
   global.fetch = async (url, opts = {}) => {
     calls.push({ url: String(url), opts });
-    const json = (status, data) => ({ ok: status < 300, status, json: async () => data });
+    const json = (status, data) => ({ ok: status < 300, status, json: async () => data, text: async () => JSON.stringify(data) });
     if (String(url).endsWith('/admin/oauth/access_token')) {
       const body = new URLSearchParams(opts.body);
       assert.strictEqual(body.get('grant_type'), 'client_credentials');
@@ -129,4 +129,49 @@ test('erros da Shopify viram mensagens claras (em vez de "erro interno")', async
   await assert.rejects(shopify.graphql(config, '{ shop { name } }'), /Acesso negado.*read_orders/);
   global.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error('html'); } });
   await assert.rejects(shopify.graphql(config, '{ shop { name } }'), /resposta inesperada/);
+});
+
+
+test('mostra o motivo real quando a Shopify recusa o Client ID/secret (resposta em texto)', async () => {
+  const config = { shop_domain: 'atelie.myshopify.com', client_id: 'outro', client_secret: 's', api_version: '2026-10' };
+  global.fetch = async () => ({ ok: false, status: 400, json: async () => { throw new Error('x'); }, text: async () => 'Oauth error shop_not_permitted: Client credentials cannot be performed on this shop.' });
+  await assert.rejects(shopify.graphql(config, '{ shop { name } }'), /mesma organização.*Conectar com a Shopify/);
+  global.fetch = async () => ({ ok: false, status: 400, text: async () => '<html><body><h1>Oauth error invalid_request: missing parameter</h1></body></html>' });
+  await assert.rejects(shopify.graphql(config, '{ shop { name } }'), /erro 400: Oauth error invalid_request: missing parameter/);
+});
+
+test('autorização direta (OAuth): link, assinatura do retorno, troca do código e renovação', async () => {
+  const { setSetting, getSetting } = require('../server/db');
+  setSetting('shopify', { shop_domain: 'atelie.myshopify.com', client_id: 'cid', client_secret: 'csecret' });
+  let config = shopify.getConfig();
+  const url = new URL(shopify.authorizeUrl(config, 'https://kanban.exemplo.com/api/shopify/oauth/callback', 'abc'));
+  assert.strictEqual(url.origin + url.pathname, 'https://atelie.myshopify.com/admin/oauth/authorize');
+  assert.strictEqual(url.searchParams.get('scope'), 'read_orders,read_products,read_customers');
+
+  const query = { code: 'c0de', shop: 'atelie.myshopify.com', state: 'abc', timestamp: '1700000000' };
+  const msg = Object.keys(query).sort().map((k) => `${k}=${query[k]}`).join('&');
+  const hmac = crypto.createHmac('sha256', 'csecret').update(msg).digest('hex');
+  assert.ok(shopify.verifyCallback({ ...query, hmac }, 'csecret'));
+  assert.ok(!shopify.verifyCallback({ ...query, hmac }, 'outro'));
+  assert.ok(!shopify.verifyCallback({ ...query, code: 'alterado', hmac }, 'csecret'));
+
+  const calls = [];
+  global.fetch = async (u, opts = {}) => {
+    calls.push(new URLSearchParams(opts.body));
+    const body = new URLSearchParams(opts.body);
+    const data = body.get('code')
+      ? { access_token: 'shpat_a', expires_in: 3600, refresh_token: 'shprt_1', refresh_token_expires_in: 7776000, scope: 'read_orders' }
+      : { access_token: 'shpat_b', expires_in: 3600, refresh_token: 'shprt_2', refresh_token_expires_in: 7776000 };
+    return { ok: true, status: 200, text: async () => JSON.stringify(data) };
+  };
+  await shopify.exchangeCode(config, 'c0de');
+  assert.strictEqual(calls[0].get('expiring'), '1');
+  config = shopify.getConfig();
+  assert.strictEqual(await shopify.accessToken(config), 'shpat_a');
+  // token vencido → usa o refresh token e guarda o novo par
+  setSetting('shopify', { ...getSetting('shopify'), oauth: { ...config.oauth, expires_at: Date.now() - 1000 } });
+  assert.strictEqual(await shopify.accessToken(shopify.getConfig()), 'shpat_b');
+  assert.strictEqual(calls[1].get('grant_type'), 'refresh_token');
+  assert.strictEqual(calls[1].get('refresh_token'), 'shprt_1');
+  assert.strictEqual(getSetting('shopify').oauth.refresh_token, 'shprt_2');
 });

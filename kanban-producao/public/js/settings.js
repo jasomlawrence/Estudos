@@ -163,6 +163,12 @@ const PANELS = {
     });
 
     const webhookUrl = `${location.origin}${c.webhook_path}`;
+    const redirectUrl = `${location.origin}${c.oauth_redirect_path}`;
+    const connectShopify = async () => {
+      if (!(await saveCfg())) return;
+      const r = await attempt(() => post('/integrations/shopify/oauth/start'));
+      if (r) location.href = r.url; // vai para a Shopify aprovar e volta sozinho
+    };
     const collect = () => ({
       enabled: f.enabled.checked, shop_domain: f.shop_domain.value, webhook_secret: f.webhook_secret.value, access_token: f.access_token.value,
       client_id: f.client_id.value, client_secret: f.client_secret.value,
@@ -183,17 +189,25 @@ const PANELS = {
           h('p', { class: 'small' }, 'Desde janeiro de 2026 a Shopify não permite mais criar "apps personalizados" dentro do admin. O app agora é criado no Dev Dashboard e a conexão usa o Client ID e o Client secret.'),
           h('ol', { class: 'small' },
             h('li', {}, 'No admin da Shopify, vá em Configurações → Apps → Desenvolver apps e abra o Dev Dashboard (ou acesse dev.shopify.com com a mesma conta). Clique em "Criar app", escolha começar pelo Dev Dashboard e dê um nome (ex.: Kanban Produção).'),
-            h('li', {}, `Na aba Versões, crie uma versão: em "App URL" use ${location.origin}; versão da API de webhooks ${c.default_api_version}; e marque os escopos read_orders, read_products e read_customers. Clique em Lançar (Release).`),
+            h('li', {}, `Na aba Versões, crie uma versão: em "App URL" use ${location.origin}; em "URLs de redirecionamento" (Redirect URLs) adicione ${redirectUrl}; versão da API de webhooks ${c.default_api_version}; e marque os escopos read_orders, read_products e read_customers. Clique em Lançar (Release).`),
             h('li', {}, 'Na visão geral do app, clique em "Instalar app" e escolha a sua loja.'),
             h('li', {}, 'Nas configurações do app, copie o Client ID e o Client secret e cole nos campos abaixo. No domínio, pode colar o link do admin (admin.shopify.com/store/…) que o sistema converte.'),
-            h('li', {}, 'Clique em Salvar, depois em "Testar conexão" e por fim em "Registrar webhook".'),
+            h('li', {}, 'Clique em "Conectar com a Shopify", aprove o acesso na tela da Shopify e você volta para cá conectado. Depois clique em "Testar conexão" e em "Registrar webhook".'),
             h('li', {}, 'Se o nome, o endereço ou o e-mail do cliente chegarem vazios nos cards, peça no Dev Dashboard o acesso a "dados protegidos de clientes" (nome, endereço, e-mail e telefone).'))),
         h('label', { class: 'form-row' }, 'Domínio da loja', f.shop_domain),
         h('label', { class: 'form-row' }, 'Client ID', f.client_id),
         h('label', { class: 'form-row' }, 'Client secret', f.client_secret),
         h('label', { class: 'form-row' }, 'Versão da API', f.api_version),
         h('div', { class: 'form-row' }, 'Endereço público deste sistema', publicUrl),
+        h('div', { class: 'form-row' }, 'URL de redirecionamento (para o Dev Dashboard)', h('div', { class: 'row' }, h('code', { class: 'grow' }, redirectUrl), h('button', { class: 'btn small', onclick: () => { copyText(redirectUrl); toast('Copiado', 'ok'); } }, 'Copiar'))),
+        h('p', { class: c.oauth_connected ? 'ok-text' : 'muted small' }, c.oauth_connected
+          ? `✓ Conectado com autorização da Shopify desde ${new Date(c.oauth_connected_at).toLocaleString('pt-BR')}${c.oauth_scope ? ` (permissões: ${c.oauth_scope})` : ''}.`
+          : 'Ainda não autorizado pela Shopify. Clique em "Conectar com a Shopify".'),
         h('div', { class: 'row wrap' },
+          h('button', { class: 'btn primary', onclick: connectShopify }, c.oauth_connected ? 'Reconectar com a Shopify' : 'Conectar com a Shopify'),
+          c.oauth_connected ? h('button', { class: 'btn subtle', onclick: async () => {
+            if (await attempt(() => post('/integrations/shopify/oauth/disconnect'), 'Autorização removida')) PANELS.shopify(panel);
+          } }, 'Desconectar') : null,
           h('button', { class: 'btn', onclick: async () => { await saveCfg(); const s = await attempt(() => post('/integrations/shopify/test')); if (s) toast(`Conectado à loja ${s.name}`, 'ok'); } }, 'Testar conexão'),
           h('button', { class: 'btn', onclick: async () => {
             await saveCfg();

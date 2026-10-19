@@ -60,10 +60,12 @@ O Shopify precisa enviar os pedidos para um endereço público com **https**. Op
 Em **⚙ Configurações → Shopify** (o passo a passo também está na tela):
 
 1. No admin da Shopify, vá em **Configurações → Apps → Desenvolver apps** e abra o **Dev Dashboard** (ou acesse [dev.shopify.com](https://dev.shopify.com) com a mesma conta). Clique em **Criar app**, escolha começar pelo Dev Dashboard e dê um nome.
-2. Na aba **Versões**, crie uma versão: em *App URL* coloque o endereço do sistema (ex.: `https://kanban-producao.onrender.com`), use a versão de webhooks **2026-10** e marque os escopos **read_orders**, **read_products** e **read_customers**. Clique em **Lançar (Release)**.
+2. Na aba **Versões**, crie uma versão: em *App URL* coloque o endereço do sistema (ex.: `https://kanban-producao.onrender.com`); em *URLs de redirecionamento* adicione `https://kanban-producao.onrender.com/api/shopify/oauth/callback`; use a versão de webhooks **2026-10** e marque os escopos **read_orders**, **read_products** e **read_customers**. Clique em **Lançar (Release)**.
 3. Na visão geral do app, clique em **Instalar app** e escolha a sua loja.
 4. Nas configurações do app, copie o **Client ID** e o **Client secret** e cole no sistema, junto com o domínio da loja (pode colar o link do admin `admin.shopify.com/store/...`, que o sistema converte para `....myshopify.com`).
-5. Clique em **Salvar**, **Testar conexão** e **Registrar webhook**. A partir daí, cada pedido novo chega sozinho.
+5. Clique em **Conectar com a Shopify**, aprove o acesso na tela da Shopify e você volta conectado. Depois clique em **Testar conexão** e **Registrar webhook**. A partir daí, cada pedido novo chega sozinho.
+
+   *Por que esse botão?* A troca direta de Client ID/secret por acesso (client credentials) só funciona quando a loja está na **mesma organização** do app no Dev Dashboard; caso contrário a Shopify responde `shop_not_permitted`. A autorização pelo botão funciona em qualquer caso e o acesso é renovado automaticamente.
 6. Defina as **palavras‑chave** (padrão: "anel de noivado, noivado, solitário"), a **coluna de entrada** e **qual dado do pedido preenche cada campo**. Marque **Integração ativa** e salve.
 
 Se o nome, o endereço ou o e-mail do cliente chegarem vazios, peça no Dev Dashboard o acesso a **dados protegidos de clientes**.

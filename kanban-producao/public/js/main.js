@@ -49,6 +49,14 @@ async function startApp() {
   refreshNotifications();
   const m = location.hash.match(/card=(\d+)/);
   if (m) openCard(Number(m[1]));
+  // Volta da autorização da Shopify (#shopify=ok ou #shopify=erro&msg=…)
+  const back = new URLSearchParams(location.hash.slice(1));
+  if (back.get('shopify')) {
+    history.replaceState(null, '', location.pathname);
+    if (back.get('shopify') === 'ok') toast('Loja conectada com a Shopify! Agora clique em "Registrar webhook".', 'ok');
+    else toast(back.get('msg') || 'Não foi possível conectar com a Shopify.', 'error');
+    openSettings('shopify');
+  }
   setInterval(() => { if (!state.dragging && !document.hidden) reloadSoon(); }, 60000); // atualiza cronômetros
 }
 
