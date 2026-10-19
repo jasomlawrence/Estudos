@@ -3,6 +3,7 @@ import { h, $, clear, textColorFor, fmtDateTime, fmtDuration, avatar, toLocalInp
 import { get, post, patch, del, api, attempt, modal, popover, confirmDialog, toast } from './api.js';
 import { state, canEdit, userById, labelById } from './state.js';
 import { activityItem } from './activity.js';
+import { openLightbox } from './lightbox.js';
 import { reloadSoon } from './board.js';
 
 let current = null; // { card, modal }
@@ -44,8 +45,9 @@ function render() {
   const col = state.columns.find((c) => c.id === card.column_id);
   $('.modal-head h2', m.el).textContent = '';
 
-  const cover = card.cover ? h('div', { class: 'modal-cover', style: { backgroundImage: `url("${card.cover}")` } },
-    editable ? h('button', { class: 'btn small', onclick: () => save({ cover_attachment_id: null }) }, 'Remover capa') : null) : null;
+  const cover = card.cover ? h('div', { class: 'modal-cover', title: 'Clique para ampliar', style: { backgroundImage: `url("${card.cover}")` },
+    onclick: () => showImages(card, card.cover_attachment_id) },
+    editable ? h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); save({ cover_attachment_id: null }); } }, 'Remover capa') : null) : null;
 
   const title = h('textarea', {
     class: 'card-title-input', rows: 1, value: card.title, readOnly: !editable, dataset: { key: 'title' },
@@ -265,7 +267,8 @@ function attachmentsSection(card, editable) {
       const isCover = card.cover_attachment_id === a.id;
       return h('div', { class: `attachment${isCover ? ' is-cover' : ''}` },
         a.is_image
-          ? h('a', { href: a.url, target: '_blank', rel: 'noopener', class: 'thumb', style: { backgroundImage: `url("${a.url}")` }, title: a.original_name })
+          ? h('a', { href: a.url, class: 'thumb', style: { backgroundImage: `url("${a.url}")` }, title: `${a.original_name} (clique para ampliar)`,
+            onclick: (e) => { e.preventDefault(); showImages(card, a.id); } })
           : h('a', { href: a.url, target: '_blank', rel: 'noopener', class: 'thumb file' }, (a.original_name.split('.').pop() || 'arquivo').toUpperCase()),
         h('div', { class: 'attachment-info' },
           h('strong', { title: a.original_name }, a.original_name),
@@ -337,10 +340,22 @@ function productionSection(card) {
 const stat = (label, value, cls = '') => h('div', { class: `stat ${cls}` }, h('small', {}, label), h('strong', {}, value));
 
 // ---------- Ações ----------
+/** Abre as imagens do card no lightbox, começando pela clicada */
+function showImages(card, attachmentId) {
+  const list = card.attachments.filter((a) => a.is_image);
+  openLightbox(list.map((a) => ({ url: a.url, name: a.original_name })), Math.max(0, list.findIndex((a) => a.id === attachmentId)));
+}
+
 function sidebar(card, editable, col) {
   return h('aside', { class: 'card-side' },
     h('h4', {}, 'Ações'),
     card.external_url ? h('a', { class: 'btn block', href: card.external_url, target: '_blank', rel: 'noopener' }, icon('bag'), 'Abrir pedido no Shopify') : null,
+    editable && card.source === 'shopify' ? h('button', { class: 'btn block', onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      const r = await attempt(() => post(`/cards/${card.id}/shopify-images`));
+      if (r) { toast(r.added ? `${r.added} foto(s) do pedido anexada(s)` : 'As fotos do pedido já estavam anexadas', 'ok'); current.card = r.card; render(); reloadSoon(); }
+      else e.currentTarget.disabled = false;
+    } }, icon('clip'), 'Buscar foto do pedido') : null,
     editable ? h('button', { class: 'btn block', onclick: async () => {
       const r = await attempt(() => post(`/cards/${card.id}/notify`));
       if (r) { toast(`Aviso enviado: ${r.channels.join(', ') || 'nenhum canal ativo'}`, 'ok'); current.card = await get(`/cards/${card.id}`); render(); }

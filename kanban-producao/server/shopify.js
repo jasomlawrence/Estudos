@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { q, getSetting, setSetting } = require('./db');
 const { createCard, logActivity } = require('./cards');
 const correios = require('./correios');
+const images = require('./images');
 
 // Versão estável mais recente (out/2026). Versões antigas salvas são trocadas automaticamente
 // por esta, porque a Shopify desativa cada versão ~12 meses após o lançamento.
@@ -103,6 +104,7 @@ function normalizeRestOrder(o, shopDomain) {
       price: li.price,
       product_id: li.product_id ? String(li.product_id) : '',
       properties: Object.fromEntries((li.properties || []).map((p) => [p.name, p.value])),
+      image_url: null, // o webhook não traz a foto; buscada depois pela API (enrichImages)
     })),
   };
 }
@@ -139,6 +141,7 @@ function normalizeGraphqlOrder(o, shopDomain) {
       product_tags: li.product?.tags || [],
       product_type: li.product?.productType || '',
       properties: Object.fromEntries((li.customAttributes || []).map((p) => [p.key, p.value])),
+      image_url: li.image?.url || null,
     })),
   };
 }
@@ -222,6 +225,7 @@ function buildCards(order, config, productInfo = {}) {
       dueDate,
       labels: config.label_ids || [],
       props: Object.assign({}, ...g.items.map((li) => li.properties)),
+      images: [...g.items.map((li) => li.image_url), ...g.items.flatMap((li) => images.imageUrlsIn(li.properties))].filter(Boolean),
       shipping: { zip: correios.onlyDigits(order.zip) || null },
     };
   });
@@ -237,18 +241,52 @@ async function importOrder(order, config = getConfig(), userId = null) {
   }
   let created = 0;
   const correiosConfig = correios.getConfig();
+  const withImages = config.attach_images !== false;
+  if (withImages) await enrichImages(order, config);
   for (const data of buildCards(order, config, productInfo)) {
     if (q.get('SELECT id FROM cards WHERE external_id = ?', data.externalId)) continue;
     if (correiosConfig.enabled) await applyCorreios(data, order, config, correiosConfig);
     try {
-      createCard({ ...data, boardId: config.board_id, columnId: config.column_id, source: 'shopify' }, userId);
+      const cardId = createCard({ ...data, boardId: config.board_id, columnId: config.column_id, source: 'shopify' }, userId);
       created++;
+      if (withImages && data.images.length) await images.attachRemoteImages(cardId, data.images, { userId });
     } catch (err) {
       if (!/UNIQUE/.test(err.message)) throw err; // webhook duplicado chegando ao mesmo tempo
     }
   }
   if (created) logActivity(config.board_id, null, userId, 'shopify.imported', { order: order.name, cards: created });
   return created;
+}
+
+/** O webhook do pedido não traz as fotos dos produtos: busca pela API (se houver acesso) */
+async function enrichImages(order, config) {
+  if (order.line_items.every((li) => li.image_url) || !hasApiAccess(config)) return;
+  try {
+    const found = await fetchLineItemImages(config, order.id);
+    for (const li of order.line_items) li.image_url ||= found[li.id] || null;
+  } catch (err) {
+    console.error(`[shopify] fotos do pedido ${order.name}:`, err.message);
+  }
+}
+
+/** Foto de cada item do pedido (id do item → URL), pela Admin API */
+async function fetchLineItemImages(config, orderId) {
+  const data = await graphql(config, `query($id: ID!) { order(id: $id) { lineItems(first: 100) { nodes { id image { url } customAttributes { key value } } } } }`,
+    { id: `gid://shopify/Order/${orderId}` });
+  if (!data.order) throw new Error('pedido não encontrado na Shopify');
+  return Object.fromEntries(data.order.lineItems.nodes.map((li) => [gidToId(li.id), li.image?.url || null]));
+}
+
+/** Busca e anexa a foto do pedido a um card já existente (botão no card) */
+async function attachOrderImages(card, userId) {
+  const [, orderId, lineItemId] = /^shopify:(\d+)(?::(\d+))?/.exec(card.external_id || '') || [];
+  if (!orderId) throw new Error('Este card não veio de um pedido do Shopify.');
+  const config = getConfig();
+  if (!hasApiAccess(config)) throw new Error('Conecte a loja em Configurações → Shopify para buscar as fotos.');
+  const found = await fetchLineItemImages(config, orderId);
+  const urls = lineItemId ? [found[lineItemId]] : Object.values(found);
+  if (!urls.filter(Boolean).length) throw new Error('A Shopify não tem foto cadastrada para este produto.');
+  return images.attachRemoteImages(card.id, urls, { userId });
 }
 
 /**
@@ -439,6 +477,7 @@ const ORDER_FIELDS = `
   shippingAddress { name address1 address2 city province provinceCode zip country phone }
   lineItems(first: 50) { nodes {
     id title variantTitle sku vendor quantity
+    image { url }
     originalUnitPriceSet { shopMoney { amount } }
     customAttributes { key value }
     product { id tags productType }
@@ -481,5 +520,5 @@ async function registerWebhook(config, callbackUrl) {
 
 module.exports = {
   SOURCES, getConfig, verifyHmac, normalizeRestOrder, normalizeGraphqlOrder, matchLineItem, buildCards,
-  importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, DEFAULT_API_VERSION, authorizeUrl, verifyCallback, exchangeCode,
+  importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, attachOrderImages, DEFAULT_API_VERSION, authorizeUrl, verifyCallback, exchangeCode,
 };

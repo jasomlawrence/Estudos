@@ -138,6 +138,7 @@ const PANELS = {
           .map(([v, l]) => h('option', { value: v, selected: v === c.mode }, l))),
       title_template: h('input', { value: c.title_template }),
       due_days: h('input', { type: 'number', min: 0, value: c.due_days }),
+      attach_images: h('input', { type: 'checkbox', checked: c.attach_images !== false }),
     };
     const labelSet = new Set(c.label_ids || []);
     const labelsBox = h('div', { class: 'row wrap' }, state.labels.map((l) => h('button', {
@@ -174,7 +175,7 @@ const PANELS = {
       client_id: f.client_id.value, client_secret: f.client_secret.value,
       api_version: f.api_version.value, board_id: state.boardId, column_id: Number(f.column_id.value), keywords: f.keywords.value,
       product_ids: f.product_ids.value, tags: f.tags.value, mode: f.mode.value, title_template: f.title_template.value,
-      due_days: Number(f.due_days.value), label_ids: [...labelSet], mapping,
+      due_days: Number(f.due_days.value), label_ids: [...labelSet], mapping, attach_images: f.attach_images.checked,
     });
     const saveCfg = () => attempt(() => put('/integrations/shopify', collect()), 'Configuração do Shopify salva');
     const days = h('input', { type: 'number', value: 30, min: 1, style: { width: '80px' } });
@@ -231,6 +232,7 @@ const PANELS = {
         h('p', { class: 'muted small' }, 'Use {order_name}, {customer_name}, {product_title}, {variant_title}, {sku} ou {prop:Nome da personalização}.'),
         h('label', { class: 'form-row' }, 'Prazo de entrega (dias após o pedido)', f.due_days),
         h('div', { class: 'form-row' }, 'Etiquetas automáticas', labelsBox),
+        h('label', { class: 'check' }, f.attach_images, ' Anexar a foto do produto (e fotos enviadas na personalização) e usar como capa do card'),
         h('h4', {}, 'Preencher campos do card com dados do pedido'),
         state.fields.length ? h('table', { class: 'map-table' }, h('tbody', {}, mapRows)) : h('p', { class: 'muted' }, 'Crie campos na aba "Campos do card" para mapear.')),
       h('div', { class: 'row' },
