@@ -16,6 +16,16 @@ const { cycleMs, stats, columnDurations, resolveCycleColumns } = require('./cycl
 
 const router = express.Router();
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+// Falhas ao falar com serviços externos (Shopify, Google, Correios…): mostra o motivo real ao usuário
+// em vez de "Erro interno do servidor"
+const external = (fn) => wrap(async (req, res, next) => {
+  try {
+    await fn(req, res, next);
+  } catch (err) {
+    if (!err.status) { err.status = 502; console.error('[integração]', req.path, err.message); }
+    throw err;
+  }
+});
 const { httpError, logActivity, parseJSON } = cards;
 const AVATAR_COLORS = ['#5b6ee1', '#e1765b', '#2fa36b', '#b25be1', '#e1b25b', '#3aa0c8', '#c84a7a', '#6b7a8f'];
 
@@ -427,7 +437,7 @@ router.post('/cards/:id/correios', wrap(async (req, res) => {
   res.json({ ...r, card: cards.cardDetail(card.id) });
 }));
 
-router.post('/cards/:id/notify', wrap(async (req, res) => {
+router.post('/cards/:id/notify', external(async (req, res) => {
   const card = q.get('SELECT * FROM cards WHERE id = ?', req.params.id);
   if (!card) throw httpError(404, 'Card não encontrado.');
   const label = card.due_date ? 'Lembrete de prazo de entrega' : 'Lembrete';
@@ -547,7 +557,7 @@ router.put('/integrations/shopify', auth.requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/integrations/shopify/import', auth.requireAdmin, wrap(async (req, res) => {
+router.post('/integrations/shopify/import', auth.requireAdmin, external(async (req, res) => {
   const config = shopify.getConfig();
   const orders = await shopify.fetchRecentOrders(config, Number(req.body.days) || 30);
   let created = 0;
@@ -555,14 +565,14 @@ router.post('/integrations/shopify/import', auth.requireAdmin, wrap(async (req, 
   res.json({ orders: orders.length, created });
 }));
 
-router.post('/integrations/shopify/register-webhook', auth.requireAdmin, wrap(async (req, res) => {
+router.post('/integrations/shopify/register-webhook', auth.requireAdmin, external(async (req, res) => {
   const base = String(req.body.public_url || getSetting('app', {}).public_url || '').replace(/\/$/, '');
   if (!/^https:\/\//.test(base)) throw httpError(400, 'Informe o endereço público (https) deste sistema.');
   const id = await shopify.registerWebhook(shopify.getConfig(), `${base}/webhooks/shopify/orders`);
   res.json({ id });
 }));
 
-router.post('/integrations/shopify/test', auth.requireAdmin, wrap(async (req, res) => {
+router.post('/integrations/shopify/test', auth.requireAdmin, external(async (req, res) => {
   const data = await shopify.graphql(shopify.getConfig(), '{ shop { name myshopifyDomain } }');
   res.json(data.shop);
 }));
@@ -622,7 +632,7 @@ router.put('/integrations/sheets/:boardId', auth.requireAdmin, (req, res) => {
   res.json({ ok: true, client_email: next.credentials?.client_email });
 });
 
-router.post('/integrations/sheets/:boardId/sync', auth.requireAdmin, wrap(async (req, res) => {
+router.post('/integrations/sheets/:boardId/sync', auth.requireAdmin, external(async (req, res) => {
   const boardId = Number(req.params.boardId);
   const count = await sheets.enqueue(boardId, () => sheets.fullSync(boardId)).then(() => getSetting(`sheets_status:${boardId}`));
   if (!count?.ok) throw httpError(400, count?.message || 'Falha ao sincronizar.');
@@ -646,7 +656,7 @@ router.put('/integrations/notifications/:boardId', auth.requireAdmin, (req, res)
   res.json({ ok: true });
 });
 
-router.post('/integrations/notifications/check', auth.requireAdmin, wrap(async (req, res) => {
+router.post('/integrations/notifications/check', auth.requireAdmin, external(async (req, res) => {
   await notifications.checkDueDates();
   res.json({ ok: true });
 }));

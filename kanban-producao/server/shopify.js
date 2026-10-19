@@ -292,6 +292,31 @@ function normalizeShopDomain(input) {
   return host.includes('.') ? host : `${host}.myshopify.com`;
 }
 
+/** fetch com mensagem clara quando a loja nem responde (domínio errado, sem internet…) */
+async function shopFetch(config, path, opts) {
+  try {
+    return await fetch(`https://${config.shop_domain}${path}`, opts);
+  } catch (err) {
+    const code = err.cause?.code || err.code || '';
+    if (/ENOTFOUND|EAI_AGAIN/.test(code)) {
+      throw new Error(`A loja "${config.shop_domain}" não foi encontrada. Use o domínio .myshopify.com (aparece em Configurações → Domínios no admin da Shopify) ou cole o link do admin (admin.shopify.com/store/…).`);
+    }
+    throw new Error(`Não consegui me comunicar com a Shopify (${code || err.message}). Tente de novo em alguns minutos.`);
+  }
+}
+
+/** Monta uma mensagem legível a partir dos erros da GraphQL da Shopify */
+function graphqlError(status, body) {
+  const list = Array.isArray(body.errors) ? body.errors : body.errors ? [body.errors] : [];
+  const text = list.map((e) => (typeof e === 'string' ? e : e.message)).filter(Boolean).join('; ') || JSON.stringify(body).slice(0, 200);
+  if (status === 401) return 'A Shopify não aceitou as credenciais (401). Confira o Client ID/secret e se o app está instalado na loja.';
+  if (status === 403 || /access denied|ACCESS_DENIED/i.test(text)) {
+    return `Acesso negado pela Shopify: ${text}. Confira os escopos do app (read_orders, read_products, read_customers), lance uma nova versão no Dev Dashboard e aprove a atualização na loja.`;
+  }
+  if (status === 404) return 'Loja ou versão da API não encontrada (404). Confira o domínio .myshopify.com.';
+  return `A Shopify respondeu ${status}: ${text}`;
+}
+
 const hasApiAccess = (config) => !!(config.shop_domain && (config.access_token || (config.client_id && config.client_secret)));
 
 async function accessToken(config) {
@@ -300,7 +325,7 @@ async function accessToken(config) {
   const key = `${config.shop_domain}:${config.client_id}`;
   const cached = tokenCache.get(key);
   if (cached && cached.exp > Date.now() + 5 * 60000) return cached.token;
-  const res = await fetch(`https://${config.shop_domain}/admin/oauth/access_token`, {
+  const res = await shopFetch(config, '/admin/oauth/access_token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'client_credentials', client_id: config.client_id, client_secret: config.client_secret }),
@@ -318,13 +343,14 @@ async function accessToken(config) {
 
 async function graphql(config, query, variables = {}) {
   if (!hasApiAccess(config)) throw new Error('Informe o domínio da loja e o Client ID + Client secret do app (ou o token shpat_ de um app antigo).');
-  const res = await fetch(`https://${config.shop_domain}/admin/api/${config.api_version || DEFAULT_API_VERSION}/graphql.json`, {
+  const res = await shopFetch(config, `/admin/api/${config.api_version || DEFAULT_API_VERSION}/graphql.json`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': await accessToken(config) },
     body: JSON.stringify({ query, variables }),
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok || body.errors) throw new Error(`Shopify respondeu ${res.status}: ${JSON.stringify(body.errors || body).slice(0, 300)}`);
+  if (!res.ok || body.errors) throw new Error(graphqlError(res.status, body));
+  if (!body.data) throw new Error('A Shopify devolveu uma resposta inesperada. Confira se o domínio é o .myshopify.com da loja (e não o domínio próprio do site).');
   return body.data;
 }
 
