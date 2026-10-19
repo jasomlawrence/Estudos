@@ -540,18 +540,25 @@ const mask = (s) => (s ? `••••••${String(s).slice(-4)}` : '');
 const isMasked = (s) => typeof s === 'string' && s.startsWith('••••••');
 
 router.get('/integrations/shopify', auth.requireAdmin, (req, res) => {
-  const c = shopify.getConfig();
-  res.json({ ...c, webhook_secret: mask(c.webhook_secret), access_token: mask(c.access_token), client_secret: mask(c.client_secret), sources: shopify.SOURCES, webhook_path: '/webhooks/shopify/orders', default_api_version: shopify.DEFAULT_API_VERSION });
+  const { oauth, ...c } = shopify.getConfig();
+  res.json({
+    ...c, webhook_secret: mask(c.webhook_secret), access_token: mask(c.access_token), client_secret: mask(c.client_secret),
+    sources: shopify.SOURCES, webhook_path: '/webhooks/shopify/orders', default_api_version: shopify.DEFAULT_API_VERSION,
+    oauth_redirect_path: '/api/shopify/oauth/callback',
+    oauth_connected: !!oauth?.access_token, oauth_connected_at: oauth?.connected_at || null, oauth_scope: oauth?.scope || '',
+  });
 });
 
 router.put('/integrations/shopify', auth.requireAdmin, (req, res) => {
   const current = shopify.getConfig();
   const next = { ...current, ...req.body };
   delete next.sources; delete next.webhook_path;
-  delete next.default_api_version;
+  delete next.default_api_version; delete next.oauth_redirect_path; delete next.oauth_connected; delete next.oauth_connected_at; delete next.oauth_scope;
+  next.oauth = current.oauth; // a autorização só muda pelo fluxo "Conectar com a Shopify"
   for (const k of ['webhook_secret', 'access_token', 'client_secret']) if (isMasked(next[k])) next[k] = current[k];
   next.client_id = String(next.client_id || '').trim();
   next.shop_domain = shopify.normalizeShopDomain(next.shop_domain);
+  if (next.shop_domain !== current.shop_domain || next.client_id !== current.client_id) delete next.oauth; // outra loja/app
   setSetting('shopify', next);
   logActivity(next.board_id, null, req.user.id, 'integration.shopify', {});
   res.json({ ok: true });
@@ -571,6 +578,24 @@ router.post('/integrations/shopify/register-webhook', auth.requireAdmin, externa
   const id = await shopify.registerWebhook(shopify.getConfig(), `${base}/webhooks/shopify/orders`);
   res.json({ id });
 }));
+
+// Autorização direta: devolve o link da Shopify onde o administrador aprova o acesso
+router.post('/integrations/shopify/oauth/start', auth.requireAdmin, (req, res) => {
+  const config = shopify.getConfig();
+  if (!config.shop_domain || !config.client_id || !config.client_secret) throw httpError(400, 'Preencha e salve o domínio da loja, o Client ID e o Client secret antes.');
+  const state = crypto.randomBytes(16).toString('hex');
+  setSetting('shopify_oauth_state', { state, exp: Date.now() + 10 * 60000 });
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/shopify/oauth/callback`;
+  res.json({ url: shopify.authorizeUrl(config, redirectUri, state), redirect_uri: redirectUri });
+});
+
+router.post('/integrations/shopify/oauth/disconnect', auth.requireAdmin, (req, res) => {
+  const stored = getSetting('shopify', {});
+  delete stored.oauth;
+  setSetting('shopify', stored);
+  logActivity(stored.board_id, null, req.user.id, 'integration.shopify', {});
+  res.json({ ok: true });
+});
 
 router.post('/integrations/shopify/test', auth.requireAdmin, external(async (req, res) => {
   const data = await shopify.graphql(shopify.getConfig(), '{ shop { name myshopifyDomain } }');
