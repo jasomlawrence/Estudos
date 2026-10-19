@@ -15,7 +15,9 @@ app.disable('x-powered-by');
 // Webhook do Shopify: precisa do corpo bruto para validar a assinatura HMAC
 app.post('/webhooks/shopify/orders', express.raw({ type: '*/*', limit: '5mb' }), (req, res) => {
   const config = shopify.getConfig();
-  if (!shopify.verifyHmac(req.body, req.get('X-Shopify-Hmac-Sha256'), config.webhook_secret)) {
+  // Webhooks registrados pelo app são assinados com o Client secret; os criados no admin, com a chave de lá
+  const signature = req.get('X-Shopify-Hmac-Sha256');
+  if (![config.client_secret, config.webhook_secret].some((secret) => shopify.verifyHmac(req.body, signature, secret))) {
     return res.status(401).send('assinatura inválida');
   }
   res.status(200).send('ok'); // responde logo; o Shopify espera no máximo 5 s

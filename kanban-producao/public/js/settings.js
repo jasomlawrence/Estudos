@@ -123,10 +123,12 @@ const PANELS = {
     const cols = state.columns;
     const f = {
       enabled: h('input', { type: 'checkbox', checked: c.enabled }),
-      shop_domain: h('input', { value: c.shop_domain, placeholder: 'minhaloja.myshopify.com' }),
-      webhook_secret: h('input', { value: c.webhook_secret, placeholder: 'Chave secreta do app / assinatura do webhook' }),
-      access_token: h('input', { value: c.access_token, placeholder: 'shpat_… (opcional, para importar pedidos antigos)' }),
-      api_version: h('input', { value: c.api_version }),
+      shop_domain: h('input', { value: c.shop_domain, placeholder: 'minhaloja.myshopify.com (ou cole o link do admin)' }),
+      client_id: h('input', { value: c.client_id, placeholder: 'Client ID do app (Dev Dashboard → Configurações)', autocomplete: 'off' }),
+      client_secret: h('input', { value: c.client_secret, placeholder: 'Client secret do app', autocomplete: 'off' }),
+      webhook_secret: h('input', { value: c.webhook_secret, placeholder: 'Só se criou o webhook manualmente no admin', autocomplete: 'off' }),
+      access_token: h('input', { value: c.access_token, placeholder: 'shpat_… (só para apps antigos criados no admin)', autocomplete: 'off' }),
+      api_version: h('input', { value: c.api_version, placeholder: c.default_api_version }),
       column_id: h('select', {}, cols.map((col) => h('option', { value: col.id, selected: col.id === c.column_id }, col.name))),
       keywords: h('input', { value: c.keywords }),
       product_ids: h('input', { value: c.product_ids, placeholder: 'IDs separados por vírgula' }),
@@ -163,6 +165,7 @@ const PANELS = {
     const webhookUrl = `${location.origin}${c.webhook_path}`;
     const collect = () => ({
       enabled: f.enabled.checked, shop_domain: f.shop_domain.value, webhook_secret: f.webhook_secret.value, access_token: f.access_token.value,
+      client_id: f.client_id.value, client_secret: f.client_secret.value,
       api_version: f.api_version.value, board_id: state.boardId, column_id: Number(f.column_id.value), keywords: f.keywords.value,
       product_ids: f.product_ids.value, tags: f.tags.value, mode: f.mode.value, title_template: f.title_template.value,
       due_days: Number(f.due_days.value), label_ids: [...labelSet], mapping,
@@ -176,17 +179,37 @@ const PANELS = {
       h('p', { class: 'muted' }, 'Toda vez que entrar um pedido com anel de noivado, um card é criado automaticamente na coluna escolhida, já com os dados do cliente.'),
       h('label', { class: 'check' }, f.enabled, ' Integração ativa'),
       h('fieldset', {}, h('legend', {}, '1. Conexão'),
+        h('details', { class: 'callout', open: !c.client_id && !c.access_token }, h('summary', {}, 'Passo a passo para conectar (app no Dev Dashboard)'),
+          h('p', { class: 'small' }, 'Desde janeiro de 2026 a Shopify não permite mais criar "apps personalizados" dentro do admin. O app agora é criado no Dev Dashboard e a conexão usa o Client ID e o Client secret.'),
+          h('ol', { class: 'small' },
+            h('li', {}, 'No admin da Shopify, vá em Configurações → Apps → Desenvolver apps e abra o Dev Dashboard (ou acesse dev.shopify.com com a mesma conta). Clique em "Criar app", escolha começar pelo Dev Dashboard e dê um nome (ex.: Kanban Produção).'),
+            h('li', {}, `Na aba Versões, crie uma versão: em "App URL" use ${location.origin}; versão da API de webhooks ${c.default_api_version}; e marque os escopos read_orders, read_products e read_customers. Clique em Lançar (Release).`),
+            h('li', {}, 'Na visão geral do app, clique em "Instalar app" e escolha a sua loja.'),
+            h('li', {}, 'Nas configurações do app, copie o Client ID e o Client secret e cole nos campos abaixo. No domínio, pode colar o link do admin (admin.shopify.com/store/…) que o sistema converte.'),
+            h('li', {}, 'Clique em Salvar, depois em "Testar conexão" e por fim em "Registrar webhook".'),
+            h('li', {}, 'Se o nome, o endereço ou o e-mail do cliente chegarem vazios nos cards, peça no Dev Dashboard o acesso a "dados protegidos de clientes" (nome, endereço, e-mail e telefone).'))),
         h('label', { class: 'form-row' }, 'Domínio da loja', f.shop_domain),
-        h('label', { class: 'form-row' }, 'Chave para validar o webhook', f.webhook_secret),
-        h('label', { class: 'form-row' }, 'Token da Admin API', f.access_token),
+        h('label', { class: 'form-row' }, 'Client ID', f.client_id),
+        h('label', { class: 'form-row' }, 'Client secret', f.client_secret),
         h('label', { class: 'form-row' }, 'Versão da API', f.api_version),
-        h('div', { class: 'form-row' }, 'Endereço do webhook', h('div', { class: 'row' }, h('code', { class: 'grow' }, webhookUrl), h('button', { class: 'btn small', onclick: () => { copyText(webhookUrl); toast('Copiado', 'ok'); } }, 'Copiar'))),
-        h('p', { class: 'muted small' }, 'No Shopify: Configurações → Notificações → Webhooks → Criar webhook → evento "Criação de pedido", formato JSON, cole o endereço acima. Use a chave que aparece lá ("Seus webhooks serão assinados com…") no campo acima. Se usar um app personalizado com token, use a chave secreta do app e clique em "Registrar webhook automaticamente".')),
+        h('div', { class: 'form-row' }, 'Endereço público deste sistema', publicUrl),
+        h('div', { class: 'row wrap' },
+          h('button', { class: 'btn', onclick: async () => { await saveCfg(); const s = await attempt(() => post('/integrations/shopify/test')); if (s) toast(`Conectado à loja ${s.name}`, 'ok'); } }, 'Testar conexão'),
+          h('button', { class: 'btn', onclick: async () => {
+            await saveCfg();
+            if (await attempt(() => post('/integrations/shopify/register-webhook', { public_url: publicUrl.value }))) toast('Webhook registrado: novos pedidos já entram no quadro', 'ok');
+          } }, 'Registrar webhook')),
+        h('details', {}, h('summary', {}, 'Outras formas de conexão'),
+          h('div', { class: 'form-row' }, 'Endereço do webhook', h('div', { class: 'row' }, h('code', { class: 'grow' }, webhookUrl), h('button', { class: 'btn small', onclick: () => { copyText(webhookUrl); toast('Copiado', 'ok'); } }, 'Copiar'))),
+          h('label', { class: 'form-row' }, 'Chave do webhook criado no admin', f.webhook_secret),
+          h('p', { class: 'muted small' }, 'Se preferir criar o webhook à mão (Configurações → Notificações → Webhooks → evento "Criação de pedido", formato JSON, com o endereço acima), cole aqui a chave mostrada lá ("seus webhooks serão assinados com…").'),
+          h('label', { class: 'form-row' }, 'Token de app antigo (shpat_)', f.access_token),
+          h('p', { class: 'muted small' }, 'Só para quem já tinha um app personalizado criado no admin antes de 2026. Se preenchido, ele é usado no lugar do Client ID/secret.'))),
       h('fieldset', {}, h('legend', {}, '2. Quais pedidos entram'),
         h('label', { class: 'form-row' }, 'Palavras no nome do produto', f.keywords),
         h('label', { class: 'form-row' }, 'Ou IDs de produtos', f.product_ids),
         h('label', { class: 'form-row' }, 'Ou tags / tipo de produto', f.tags),
-        h('p', { class: 'muted small' }, 'Basta uma regra bater (as palavras ignoram acentos e maiúsculas). Tags exigem o token da Admin API. Deixe tudo vazio para trazer todos os pedidos.')),
+        h('p', { class: 'muted small' }, 'Basta uma regra bater (as palavras ignoram acentos e maiúsculas). Tags exigem a conexão com Client ID e Client secret. Deixe tudo vazio para trazer todos os pedidos.')),
       h('fieldset', {}, h('legend', {}, '3. Como o card é criado'),
         h('label', { class: 'form-row' }, 'Coluna de entrada', f.column_id),
         h('label', { class: 'form-row' }, 'Quantidade de cards', f.mode),
@@ -197,20 +220,14 @@ const PANELS = {
         h('h4', {}, 'Preencher campos do card com dados do pedido'),
         state.fields.length ? h('table', { class: 'map-table' }, h('tbody', {}, mapRows)) : h('p', { class: 'muted' }, 'Crie campos na aba "Campos do card" para mapear.')),
       h('div', { class: 'row' },
-        h('button', { class: 'btn primary', onclick: saveCfg }, 'Salvar'),
-        h('button', { class: 'btn', onclick: async () => { await saveCfg(); const s = await attempt(() => post('/integrations/shopify/test')); if (s) toast(`Conectado à loja ${s.name}`, 'ok'); } }, 'Testar conexão')),
-      h('fieldset', {}, h('legend', {}, 'Ferramentas (requer token da Admin API)'),
+        h('button', { class: 'btn primary', onclick: saveCfg }, 'Salvar')),
+      h('fieldset', {}, h('legend', {}, 'Pedidos antigos'),
         h('div', { class: 'row' }, 'Importar pedidos dos últimos', days, 'dias',
           h('button', { class: 'btn', onclick: async () => {
             await saveCfg();
             const r = await attempt(() => post('/integrations/shopify/import', { days: Number(days.value) }));
             if (r) { toast(`${r.orders} pedidos lidos, ${r.created} card(s) criados`, 'ok'); loadBoard(); }
-          } }, 'Importar')),
-        h('div', { class: 'row' }, 'Endereço público deste sistema', publicUrl,
-          h('button', { class: 'btn', onclick: async () => {
-            await saveCfg();
-            if (await attempt(() => post('/integrations/shopify/register-webhook', { public_url: publicUrl.value }))) toast('Webhook registrado no Shopify', 'ok');
-          } }, 'Registrar webhook automaticamente'))));
+          } }, 'Importar'))));
   },
 
   // ---------------- Correios ----------------
