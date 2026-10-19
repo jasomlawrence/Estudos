@@ -38,47 +38,58 @@ function dueAlert(dueISO, nowMs, config) {
   return { kind: `d${hit}`, label, all: days.filter((d) => d >= hit).map((d) => `d${d}`) };
 }
 
-async function notifyCard(card, label, { userId = null } = {}) {
-  const config = getConfig(card.board_id);
-  const column = q.get('SELECT name FROM columns WHERE id = ?', card.column_id)?.name;
-  const link = appUrl() ? `${appUrl()}/#card=${card.id}` : '';
-  const text = `⏰ ${label}: "${card.title}"${card.due_date ? ` — entrega ${fmtDate(card.due_date)}` : ''}${column ? ` — etapa: ${column}` : ''}${link ? `\n${link}` : ''}`;
+/** Usuários ativos que recebem o aviso: responsáveis do card (ou todos, se não houver) */
+function cardRecipients(card) {
+  const members = q.all('SELECT u.* FROM card_members cm JOIN users u ON u.id = cm.user_id WHERE cm.card_id = ? AND u.active = 1', card.id);
+  return members.length ? members : q.all("SELECT * FROM users WHERE active = 1 AND role != 'viewer'");
+}
 
-  let recipients = q.all('SELECT u.* FROM card_members cm JOIN users u ON u.id = cm.user_id WHERE cm.card_id = ? AND u.active = 1', card.id);
-  if (!recipients.length) recipients = q.all("SELECT * FROM users WHERE active = 1 AND role != 'viewer'");
+/**
+ * Entrega um aviso pelos canais pedidos. Usado pelos avisos de prazo e pelas automações.
+ * Retorna a lista de canais usados (para o histórico).
+ */
+async function deliver({ card, recipients, text, subject, inApp = true, email = false, extraEmails = '', webhookUrl = '', payload = {}, title = '' }) {
   const results = [];
-
-  if (config.in_app) {
+  if (inApp) {
     for (const u of recipients) {
       const info = q.run('INSERT INTO notifications (user_id, card_id, message, created_at) VALUES (?, ?, ?, ?)', u.id, card.id, text, now());
-      sendToUser(u.id, 'notification', { id: Number(info.lastInsertRowid), card_id: card.id, message: text });
+      sendToUser(u.id, 'notification', { id: Number(info.lastInsertRowid), card_id: card.id, message: text, title });
     }
     results.push(`app (${recipients.length})`);
   }
-
-  if (config.email) {
+  if (email) {
     const smtp = smtpConfig();
-    const to = [...new Set([...recipients.map((u) => u.email), ...String(config.extra_emails).split(/[,;\s]+/).filter(Boolean)])];
-    if (smtp.host && to.length) {
+    const to = [...new Set([...recipients.map((u) => u.email), ...String(extraEmails).split(/[,;\s]+/).filter(Boolean)])];
+    if (!smtp.host) results.push('e-mail não enviado (SMTP não configurado)');
+    else if (to.length) {
       try {
         const transport = nodemailer.createTransport({ host: smtp.host, port: Number(smtp.port), secure: !!smtp.secure, auth: smtp.user ? { user: smtp.user, pass: smtp.pass } : undefined });
-        await transport.sendMail({ from: smtp.from || smtp.user, to: to.join(', '), subject: `${label}: ${card.title}`, text });
+        await transport.sendMail({ from: smtp.from || smtp.user, to: to.join(', '), subject, text });
         results.push(`e-mail (${to.length})`);
       } catch (err) { results.push(`e-mail falhou: ${err.message}`); }
     }
   }
-
-  if (config.webhook_url) {
+  if (webhookUrl) {
     try {
-      const res = await fetch(config.webhook_url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, content: text, event: 'due_date_alert', alert: label, card: { id: card.id, title: card.title, due_date: card.due_date, column, url: link } }),
-      });
+      const res = await fetch(webhookUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, content: text, ...payload }) });
       results.push(res.ok ? 'webhook' : `webhook falhou (${res.status})`);
     } catch (err) { results.push(`webhook falhou: ${err.message}`); }
   }
+  return results;
+}
 
+const cardLink = (card) => (appUrl() ? `${appUrl()}/#card=${card.id}` : '');
+
+async function notifyCard(card, label, { userId = null } = {}) {
+  const config = getConfig(card.board_id);
+  const column = q.get('SELECT name FROM columns WHERE id = ?', card.column_id)?.name;
+  const link = cardLink(card);
+  const text = `⏰ ${label}: "${card.title}"${card.due_date ? ` — entrega ${fmtDate(card.due_date)}` : ''}${column ? ` — etapa: ${column}` : ''}${link ? `\n${link}` : ''}`;
+  const results = await deliver({
+    card, recipients: cardRecipients(card), text, subject: `${label}: ${card.title}`, title: 'Prazo de entrega',
+    inApp: config.in_app, email: config.email, extraEmails: config.extra_emails, webhookUrl: config.webhook_url,
+    payload: { event: 'due_date_alert', alert: label, card: { id: card.id, title: card.title, due_date: card.due_date, column, url: link } },
+  });
   logActivity(card.board_id, card.id, userId, 'card.notified', { alert: label, channels: results.join(', ') });
   return results;
 }
@@ -110,4 +121,4 @@ function start() {
   setInterval(() => checkDueDates(), minutes * 60000).unref();
 }
 
-module.exports = { getConfig, smtpConfig, dueAlert, notifyCard, checkDueDates, start };
+module.exports = { getConfig, smtpConfig, dueAlert, notifyCard, checkDueDates, start, deliver, cardRecipients, cardLink, fmtDate };

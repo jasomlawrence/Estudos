@@ -3,6 +3,7 @@
 const { q, transaction, now } = require('./db');
 const { bus, boardChanged } = require('./events');
 const { computeCycle, columnDurations } = require('./cycle');
+const rules = require('./rules');
 
 const FIELD_TYPES = ['text', 'textarea', 'number', 'currency', 'date', 'datetime', 'checkbox', 'select', 'multiselect', 'url', 'email', 'phone'];
 
@@ -120,9 +121,9 @@ const setFieldValues = (card, values, userId, log = true) => {
     if (value === null) q.run('DELETE FROM card_field_values WHERE card_id = ? AND field_id = ?', card.id, def.id);
     else q.run(`INSERT INTO card_field_values (card_id, field_id, value) VALUES (?, ?, ?)
                 ON CONFLICT(card_id, field_id) DO UPDATE SET value = excluded.value`, card.id, def.id, JSON.stringify(value));
-    changes.push({ field: def.name, from: displayValue(def, oldValue), to: displayValue(def, value) });
+    changes.push({ fieldId: def.id, field: def.name, from: displayValue(def, oldValue), to: displayValue(def, value) });
   }
-  if (log) for (const c of changes) logActivity(card.board_id, card.id, userId, 'card.field', c);
+  if (log) for (const { fieldId, ...c } of changes) logActivity(card.board_id, card.id, userId, 'card.field', c);
   return changes;
 };
 
@@ -147,7 +148,7 @@ const createCard = transaction((data, userId) => {
   setFieldValues(card, data.fields, userId, false);
   for (const labelId of data.labels || []) q.run('INSERT OR IGNORE INTO card_labels (card_id, label_id) SELECT ?, id FROM labels WHERE id = ? AND board_id = ?', cardId, labelId, column.board_id);
   logActivity(column.board_id, cardId, userId, 'card.created', { title: card.title, column: column.name, source: card.source });
-  afterChange(column.board_id, cardId, userId);
+  afterChange(column.board_id, cardId, userId, [{ type: 'created', toColumnId: column.id }]);
   return cardId;
 });
 
@@ -158,18 +159,21 @@ const moveCard = transaction((cardId, { columnId, prevId, nextId }, userId) => {
   if (!target) throw httpError(400, 'Coluna inválida.');
   const position = positionBetween(target.id, prevId, nextId, card.id);
   const at = now();
+  const events = [];
   q.run('UPDATE cards SET column_id = ?, position = ?, updated_at = ? WHERE id = ?', target.id, position, at, card.id);
   if (card.column_id !== target.id) {
     q.run('INSERT INTO card_movements (card_id, from_column_id, to_column_id, user_id, moved_at) VALUES (?, ?, ?, ?, ?)', card.id, card.column_id, target.id, userId ?? null, at);
     applyCycle(card, target.id, at);
     logActivity(card.board_id, card.id, userId, 'card.moved', { from: columnName(card.column_id), to: target.name });
+    events.push({ type: 'moved', fromColumnId: card.column_id, toColumnId: target.id });
   }
-  afterChange(card.board_id, card.id, userId);
+  afterChange(card.board_id, card.id, userId, events);
 });
 
 const updateCard = transaction((cardId, patch, userId) => {
   const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
   if (!card) throw httpError(404, 'Card não encontrado.');
+  const events = [];
   const simple = { title: 'título', description: 'descrição', color: 'cor', due_date: 'prazo de entrega', cover_attachment_id: 'capa', archived: 'arquivado' };
   for (const [key, label] of Object.entries(simple)) {
     if (!(key in patch)) continue;
@@ -200,6 +204,7 @@ const updateCard = transaction((cardId, patch, userId) => {
       if (!l) continue;
       q.run('INSERT OR IGNORE INTO card_labels (card_id, label_id) VALUES (?, ?)', card.id, id);
       logActivity(card.board_id, card.id, userId, 'card.label_added', { label: l.name, color: l.color });
+      events.push({ type: 'label_added', labelId: id });
     }
   }
   if (Array.isArray(patch.members)) {
@@ -216,9 +221,11 @@ const updateCard = transaction((cardId, patch, userId) => {
       logActivity(card.board_id, card.id, userId, 'card.member_added', { member: u.name });
     }
   }
-  if (patch.fields) setFieldValues(card, patch.fields, userId);
+  if (patch.fields) {
+    for (const c of setFieldValues(card, patch.fields, userId)) events.push({ type: 'field_changed', fieldId: c.fieldId });
+  }
   q.run('UPDATE cards SET updated_at = ? WHERE id = ?', now(), card.id);
-  afterChange(card.board_id, card.id, userId);
+  afterChange(card.board_id, card.id, userId, events);
 });
 
 function deleteCard(cardId, userId) {
@@ -232,12 +239,22 @@ function deleteCard(cardId, userId) {
   return files.map((f) => f.filename);
 }
 
-function afterChange(boardId, cardId, userId) {
+function afterChange(boardId, cardId, userId, events = []) {
+  // Alterações feitas por uma automação não disparam outras automações (evita repetição sem fim)
+  const byAutomation = !!bus.automationActive;
   // Executa depois do COMMIT para que os ouvintes leiam o estado final
   setImmediate(() => {
-    bus.emit('card:changed', { cardId, boardId });
+    bus.emit('card:changed', { cardId, boardId, byAutomation });
+    for (const evt of events) bus.emit('card:event', { ...evt, cardId, boardId, userId, byAutomation });
     boardChanged(boardId, userId, cardId);
   });
+}
+
+/** Regras de automação do quadro (com JSON já convertido) */
+function loadRules(boardId) {
+  return q.all('SELECT * FROM automations WHERE board_id = ? ORDER BY position, id', boardId).map((r) => ({
+    ...r, enabled: !!r.enabled, trigger: parseJSON(r.trigger, { type: 'always' }), conditions: parseJSON(r.conditions, []), actions: parseJSON(r.actions, []),
+  }));
 }
 
 /** Dados resumidos de vários cards, para exibir no quadro. */
@@ -250,7 +267,18 @@ function serializeCards(rows) {
   const values = q.all(`SELECT card_id, field_id, value FROM card_field_values WHERE card_id IN (${marks})`, ...ids);
   const atts = q.all(`SELECT card_id, COUNT(*) AS n FROM attachments WHERE card_id IN (${marks}) GROUP BY card_id`, ...ids);
   const covers = q.all(`SELECT a.id, a.filename, a.card_id FROM attachments a JOIN cards c ON c.cover_attachment_id = a.id WHERE c.id IN (${marks})`, ...ids);
-  return rows.map((r) => ({
+  // Regras de destaque visual ("sempre"), por quadro
+  const visual = {};
+  for (const boardId of new Set(rows.map((r) => r.board_id))) {
+    const list = loadRules(boardId).filter((r) => r.enabled && r.trigger.type === 'always');
+    visual[boardId] = list.length ? { rules: list, ctx: { now: Date.now(), fields: fieldDefs(boardId) } } : null;
+  }
+  const withHighlights = (card) => {
+    const v = visual[card.board_id];
+    card.highlights = v ? rules.highlightsFor(card, v.rules, v.ctx) : [];
+    return card;
+  };
+  return rows.map((r) => withHighlights({
     id: r.id,
     board_id: r.board_id,
     column_id: r.column_id,
@@ -283,6 +311,8 @@ function cardDetail(cardId) {
   const row = q.get('SELECT * FROM cards WHERE id = ?', cardId);
   if (!row) throw httpError(404, 'Card não encontrado.');
   const [card] = serializeCards([row]);
+  // Link do admin da Shopify (o link principal do card é a página aberta do pedido)
+  card.admin_url = row.external_id?.startsWith('shopify:') ? require('./shopify').adminOrderUrl(row) : null;
   card.attachments = q.all(`SELECT a.*, u.name AS uploaded_by_name FROM attachments a LEFT JOIN users u ON u.id = a.uploaded_by
                             WHERE a.card_id = ? ORDER BY a.id DESC`, cardId)
     .map((a) => ({ ...a, url: `/uploads/${a.filename}`, is_image: a.mime.startsWith('image/') }));
@@ -307,5 +337,5 @@ function httpError(status, message) {
 
 module.exports = {
   FIELD_TYPES, fieldDefs, normalizeValue, displayValue, logActivity, createCard, moveCard, updateCard, deleteCard,
-  serializeCards, cardDetail, httpError, boardColumns, applyCycle, parseJSON,
+  serializeCards, cardDetail, httpError, boardColumns, applyCycle, parseJSON, loadRules,
 };

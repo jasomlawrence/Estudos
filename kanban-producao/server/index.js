@@ -5,6 +5,7 @@ const { UPLOAD_DIR, getSetting, setSetting } = require('./db');
 const auth = require('./auth');
 const shopify = require('./shopify');
 const notifications = require('./notifications');
+const automations = require('./automations');
 const { router } = require('./routes');
 require('./sheets'); // registra a sincronização automática com Google Planilhas
 
@@ -69,6 +70,7 @@ const PORT = Number(process.env.PORT || 3000);
 if (require.main === module) {
   app.listen(PORT, () => console.log(`Kanban de produção rodando em http://localhost:${PORT}`));
   notifications.start();
+  automations.start();
 }
 
 module.exports = app;

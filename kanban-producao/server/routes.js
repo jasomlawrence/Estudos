@@ -12,6 +12,7 @@ const shopify = require('./shopify');
 const sheets = require('./sheets');
 const notifications = require('./notifications');
 const correios = require('./correios');
+const automations = require('./automations');
 const { cycleMs, stats, columnDurations, resolveCycleColumns } = require('./cycle');
 
 const router = express.Router();
@@ -511,6 +512,59 @@ router.post('/notifications/read', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------------- Automações ----------------
+const ruleOut = (r) => ({ ...r, enabled: !!r.enabled });
+router.get('/boards/:id/automations', (req, res) => {
+  const board = boardOr404(req.params.id);
+  res.json(cards.loadRules(board.id).map(ruleOut));
+});
+
+router.post('/boards/:id/automations', auth.requireAdmin, (req, res) => {
+  const board = boardOr404(req.params.id);
+  const r = automations.sanitize(req.body);
+  const pos = (q.get('SELECT MAX(position) AS p FROM automations WHERE board_id = ?', board.id).p ?? 0) + 1;
+  const info = q.run('INSERT INTO automations (board_id, name, enabled, trigger, conditions, actions, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    board.id, r.name, r.enabled ? 1 : 0, JSON.stringify(r.trigger), JSON.stringify(r.conditions), JSON.stringify(r.actions), pos, now());
+  logActivity(board.id, null, req.user.id, 'automation.saved', { rule: r.name });
+  events.boardChanged(board.id, req.user.id);
+  res.json({ id: Number(info.lastInsertRowid) });
+});
+
+function ruleOr404(id) {
+  const rule = q.get('SELECT * FROM automations WHERE id = ?', id);
+  if (!rule) throw httpError(404, 'Automação não encontrada.');
+  return rule;
+}
+
+router.put('/automations/:id', auth.requireAdmin, (req, res) => {
+  const rule = ruleOr404(req.params.id);
+  const r = automations.sanitize(req.body);
+  q.run('UPDATE automations SET name = ?, enabled = ?, trigger = ?, conditions = ?, actions = ? WHERE id = ?',
+    r.name, r.enabled ? 1 : 0, JSON.stringify(r.trigger), JSON.stringify(r.conditions), JSON.stringify(r.actions), rule.id);
+  // Regra alterada: as do tipo "passou a atender" podem disparar de novo
+  q.run('DELETE FROM notification_log WHERE dedupe_key LIKE ?', `auto:${rule.id}:%`);
+  logActivity(rule.board_id, null, req.user.id, 'automation.saved', { rule: r.name });
+  events.boardChanged(rule.board_id, req.user.id);
+  automations.checkMatchRules(rule.board_id).catch(() => {});
+  res.json({ ok: true });
+});
+
+router.put('/boards/:id/automations-order', auth.requireAdmin, (req, res) => {
+  const board = boardOr404(req.params.id);
+  (Array.isArray(req.body.ids) ? req.body.ids : []).forEach((id, i) => q.run('UPDATE automations SET position = ? WHERE id = ? AND board_id = ?', i + 1, Number(id), board.id));
+  events.boardChanged(board.id, req.user.id);
+  res.json({ ok: true });
+});
+
+router.delete('/automations/:id', auth.requireAdmin, (req, res) => {
+  const rule = ruleOr404(req.params.id);
+  q.run('DELETE FROM automations WHERE id = ?', rule.id);
+  q.run('DELETE FROM notification_log WHERE dedupe_key LIKE ?', `auto:${rule.id}:%`);
+  logActivity(rule.board_id, null, req.user.id, 'automation.deleted', { rule: rule.name });
+  events.boardChanged(rule.board_id, req.user.id);
+  res.json({ ok: true });
+});
+
 // ---------------- Métricas de produção ----------------
 router.get('/boards/:id/metrics', (req, res) => {
   const board = boardOr404(req.params.id);
@@ -541,6 +595,106 @@ router.get('/boards/:id/metrics', (req, res) => {
     wip: wip.map(slim),
     per_column: columns.filter((c) => perColumn[c.id]).map((c) => ({ id: c.id, name: c.name, color: c.color, ...stats(perColumn[c.id]) })),
   });
+});
+
+// ---------------- Painel (dashboard) ----------------
+const TZ = process.env.TZ || 'America/Sao_Paulo';
+const localDay = (iso) => new Date(iso).toLocaleDateString('en-CA', { timeZone: TZ }); // AAAA-MM-DD no fuso da loja
+function mondayOf(day) {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+const addDaysISO = (day, n) => { const d = new Date(`${day}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const avg = (list) => (list.length ? list.reduce((a, b) => a + b, 0) / list.length : null);
+const RISK_DAYS = 2;
+
+/** Indicadores do painel: calculados a partir dos cards não arquivados do quadro */
+function dashboardData(boardId, nowMs = Date.now()) {
+  const board = q.get('SELECT * FROM boards WHERE id = ?', boardId);
+  const columns = cards.boardColumns(boardId);
+  const { start, end } = resolveCycleColumns(columns, board.cycle_start_column_id, board.cycle_end_column_id);
+  const rows = q.all('SELECT * FROM cards WHERE board_id = ? AND archived = 0', boardId);
+  const nowISO = new Date(nowMs).toISOString();
+  const since = (days) => new Date(nowMs - days * 864e5).toISOString();
+  const active = rows.filter((c) => !c.cycle_ended_at);
+  const waiting = active.filter((c) => !c.cycle_started_at);
+  const producing = active.filter((c) => c.cycle_started_at);
+  const doneIn = (from, to = nowISO) => rows.filter((c) => c.cycle_ended_at && c.cycle_ended_at >= from && c.cycle_ended_at < to);
+  const done30 = doneIn(since(30));
+  const donePrev = doneIn(since(60), since(30));
+  const overdue = active.filter((c) => c.due_date && c.due_date < nowISO);
+  const risk = active.filter((c) => c.due_date && c.due_date >= nowISO && Date.parse(c.due_date) - nowMs <= RISK_DAYS * 864e5);
+  const onTime = (list) => list.filter((c) => c.due_date && c.cycle_ended_at <= c.due_date).length;
+  const withDue = (list) => list.filter((c) => c.due_date).length;
+
+  // Velocímetro: cards ativos ainda dentro do prazo + entregues no prazo nos últimos 30 dias
+  const activeDue = withDue(active);
+  const activeOk = activeDue - overdue.length;
+  const doneDue = withDue(done30);
+  const doneOk = onTime(done30);
+  const total = activeDue + doneDue;
+  const score = total ? Math.round(((activeOk + doneOk) / total) * 100) : null;
+
+  // Semanas (segunda a domingo) — 8 últimas, da mais antiga para a atual
+  const thisWeek = mondayOf(localDay(nowISO));
+  const weeks = Array.from({ length: 8 }, (_, i) => addDaysISO(thisWeek, (i - 7) * 7));
+  const weekly = weeks.map((w) => {
+    const next = addDaysISO(w, 7);
+    const inWeek = (iso) => iso && localDay(iso) >= w && localDay(iso) < next;
+    const finished = rows.filter((c) => inWeek(c.cycle_ended_at));
+    const lead = finished.map((c) => cycleMs(c)).filter((ms) => ms != null);
+    return { week: w, created: rows.filter((c) => inWeek(c.created_at)).length, done: finished.length, on_time: onTime(finished), avg_ms: avg(lead) };
+  });
+
+  // Tempo médio em cada etapa (cards concluídos nos últimos 90 dias)
+  const perColumn = {};
+  for (const card of doneIn(since(90))) {
+    const moves = q.all('SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, id', card.id);
+    for (const [colId, ms] of Object.entries(columnDurations(moves, card.cycle_ended_at))) {
+      if (Number(colId) !== end?.id) (perColumn[colId] ||= []).push(ms);
+    }
+  }
+
+  // Lista para as tabelas (hoje / semana / mês): ativos + o que entrou ou terminou nos últimos 45 dias
+  const recent = since(45);
+  const listed = rows.filter((c) => !c.cycle_ended_at || c.cycle_ended_at >= recent || c.created_at >= recent)
+    .sort((a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999')).slice(0, 3000);
+
+  return {
+    generated_at: nowISO,
+    today: localDay(nowISO),
+    week_start: thisWeek,
+    risk_days: RISK_DAYS,
+    cycle: { start: start && { id: start.id, name: start.name }, end: end && { id: end.id, name: end.name } },
+    kpis: {
+      producing: producing.length,
+      waiting: waiting.length,
+      overdue: overdue.length,
+      risk: risk.length,
+      done_30: done30.length,
+      done_prev: donePrev.length,
+      avg_ms_30: avg(done30.map((c) => cycleMs(c))),
+      avg_ms_prev: avg(donePrev.map((c) => cycleMs(c))),
+      on_time_30: doneDue ? doneOk / doneDue : null,
+    },
+    gauge: { score, active_ok: activeOk, active_due: activeDue, done_ok: doneOk, done_due: doneDue },
+    stages: columns.map((c) => {
+      const inCol = rows.filter((r) => r.column_id === c.id);
+      return { id: c.id, name: c.name, color: c.color, count: inCol.length, overdue: inCol.filter((r) => !r.cycle_ended_at && r.due_date && r.due_date < nowISO).length, is_end: c.id === end?.id };
+    }),
+    weekly,
+    stage_time: columns.filter((c) => perColumn[c.id]).map((c) => ({ id: c.id, name: c.name, color: c.color, avg_ms: avg(perColumn[c.id]), count: perColumn[c.id].length })),
+    cards: cards.serializeCards(listed).map((c) => ({
+      id: c.id, title: c.title, column_id: c.column_id, due_date: c.due_date, created_at: c.created_at, cover: c.cover,
+      cycle_started_at: c.cycle_started_at, cycle_ended_at: c.cycle_ended_at, members: c.members, labels: c.labels, external_url: c.external_url,
+    })),
+  };
+}
+
+router.get('/boards/:id/dashboard', (req, res) => {
+  const board = boardOr404(req.params.id);
+  res.json(dashboardData(board.id));
 });
 
 // ---------------- Integrações (somente administradores) ----------------
@@ -604,6 +758,13 @@ router.post('/integrations/shopify/oauth/disconnect', auth.requireAdmin, (req, r
   logActivity(stored.board_id, null, req.user.id, 'integration.shopify', {});
   res.json({ ok: true });
 });
+
+// Troca o link dos cards antigos (admin) pelo link aberto do pedido (página de status que o cliente vê)
+router.post('/integrations/shopify/refresh-links', auth.requireAdmin, external(async (req, res) => {
+  const r = await shopify.refreshOrderLinks(shopify.getConfig(), req.user.id);
+  for (const b of q.all('SELECT id FROM boards')) events.boardChanged(b.id, req.user.id);
+  res.json(r);
+}));
 
 router.post('/integrations/shopify/test', auth.requireAdmin, external(async (req, res) => {
   const data = await shopify.graphql(shopify.getConfig(), '{ shop { name myshopifyDomain } }');
@@ -694,4 +855,4 @@ router.post('/integrations/notifications/check', auth.requireAdmin, external(asy
   res.json({ ok: true });
 }));
 
-module.exports = { router, seedBoard };
+module.exports = { router, seedBoard, dashboardData };

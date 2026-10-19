@@ -71,7 +71,9 @@ function render() {
       title,
       h('div', { class: 'muted' }, 'na coluna ', columnSelect,
         card.source === 'shopify' ? h('span', { class: 'chip shopify' }, icon('bag', 12), ' Pedido Shopify') : null,
-        card.archived ? h('span', { class: 'chip warn' }, 'Arquivado') : null)),
+        card.archived ? h('span', { class: 'chip warn' }, 'Arquivado') : null),
+      card.highlights?.length ? h('div', { class: 'card-alerts detail', title: 'Automações que este card atende agora' },
+        card.highlights.map((x) => h('span', { class: 'card-alert', style: { '--hl': x.color } }, x.text || x.name))) : null),
     h('div', { class: 'card-detail-grid' },
       h('div', { class: 'card-main' },
         metaRow(card, editable),
@@ -349,7 +351,9 @@ function showImages(card, attachmentId) {
 function sidebar(card, editable, col) {
   return h('aside', { class: 'card-side' },
     h('h4', {}, 'Ações'),
-    card.external_url ? h('a', { class: 'btn block', href: card.external_url, target: '_blank', rel: 'noopener' }, icon('bag'), 'Abrir pedido no Shopify') : null,
+    card.external_url ? h('a', { class: 'btn block', href: card.external_url, target: '_blank', rel: 'noopener' }, icon('bag'), 'Abrir pedido') : null,
+    card.external_url ? h('button', { class: 'btn block', onclick: () => { copyText(card.external_url); toast('Link do pedido copiado', 'ok'); } }, icon('link'), 'Copiar link do pedido') : null,
+    card.admin_url && card.admin_url !== card.external_url ? h('a', { class: 'btn block subtle', href: card.admin_url, target: '_blank', rel: 'noopener' }, icon('bag'), 'Ver no admin da Shopify') : null,
     editable && card.source === 'shopify' ? h('button', { class: 'btn block', onclick: async (e) => {
       e.currentTarget.disabled = true;
       const r = await attempt(() => post(`/cards/${card.id}/shopify-images`));

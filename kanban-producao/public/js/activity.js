@@ -38,6 +38,10 @@ export function describe(a, { withCard = false } = {}) {
     case 'field.deleted': return `excluiu o campo ${q(d.name)}`;
     case 'board.created': return `criou o quadro ${q(d.name)}`;
     case 'board.cycle': return `definiu o cronômetro de produção: de ${q(d.start)} até ${q(d.end)}`;
+    case 'automation.ran': return `executou a automação ${q(d.rule)}${card}${d.actions ? `: ${d.actions}` : ''}`;
+    case 'automation.saved': return `salvou a automação ${q(d.rule)}`;
+    case 'automation.deleted': return `excluiu a automação ${q(d.rule)}`;
+    case 'shopify.links': return `atualizou o link de ${d.cards} pedido(s) do Shopify`;
     case 'shopify.imported': return `importou o pedido ${d.order} do Shopify (${d.cards} card${d.cards > 1 ? 's' : ''})`;
     case 'integration.shopify': return 'alterou a integração com o Shopify';
     case 'integration.correios': return 'alterou a integração com os Correios';
@@ -52,9 +56,9 @@ export function describe(a, { withCard = false } = {}) {
 export function activityItem(a, opts) {
   const user = userById(a.user_id);
   return h('li', { class: 'activity-item' },
-    user ? avatar(user, 28) : h('span', { class: 'avatar system', title: 'Sistema' }, a.action.startsWith('shopify') || a.action === 'card.created' ? '🛍' : '⚙'),
+    user ? avatar(user, 28) : h('span', { class: 'avatar system', title: 'Sistema' }, a.action.startsWith('shopify') || a.action === 'card.created' ? '🛍' : a.action === 'automation.ran' ? '⚡' : '⚙'),
     h('div', {},
-      h('div', {}, h('strong', {}, a.user_name || 'Sistema'), ' ', describe(a, opts)),
+      h('div', {}, h('strong', {}, a.user_name || (a.action === 'automation.ran' ? 'Automação' : 'Sistema')), ' ', describe(a, opts)),
       h('time', { title: fmtDateTime(a.created_at) }, timeAgo(a.created_at))));
 }
 

@@ -94,6 +94,7 @@ function normalizeRestOrder(o, shopDomain) {
     zip: o.shipping_address?.zip || '',
     attributes: Object.fromEntries((o.note_attributes || []).map((a) => [a.name, a.value])),
     admin_url: shopDomain ? `https://${shopDomain}/admin/orders/${o.id}` : null,
+    status_url: o.order_status_url || null, // página do pedido que o cliente vê (abre sem login no admin)
     line_items: (o.line_items || []).map((li) => ({
       id: String(li.id),
       title: li.title || li.name || '',
@@ -129,6 +130,7 @@ function normalizeGraphqlOrder(o, shopDomain) {
     zip: o.shippingAddress?.zip || '',
     attributes: Object.fromEntries((o.customAttributes || []).map((a) => [a.key, a.value])),
     admin_url: shopDomain ? `https://${shopDomain}/admin/orders/${id}` : null,
+    status_url: o.statusPageUrl || null,
     line_items: (o.lineItems?.nodes || []).map((li) => ({
       id: gidToId(li.id),
       title: li.title || '',
@@ -218,7 +220,7 @@ function buildCards(order, config, productInfo = {}) {
     ].join('\n');
     return {
       externalId: g.ext,
-      externalUrl: order.admin_url,
+      externalUrl: order.status_url || order.admin_url,
       title: renderTemplate(config.title_template, values) + (g.unit ? ` (${g.unit})` : '') || order.name,
       description,
       fields,
@@ -279,7 +281,7 @@ async function fetchLineItemImages(config, orderId) {
 
 /** Busca e anexa a foto do pedido a um card já existente (botão no card) */
 async function attachOrderImages(card, userId) {
-  const [, orderId, lineItemId] = /^shopify:(\d+)(?::(\d+))?/.exec(card.external_id || '') || [];
+  const { orderId, lineItemId } = orderRef(card) || {};
   if (!orderId) throw new Error('Este card não veio de um pedido do Shopify.');
   const config = getConfig();
   if (!hasApiAccess(config)) throw new Error('Conecte a loja em Configurações → Shopify para buscar as fotos.');
@@ -287,6 +289,52 @@ async function attachOrderImages(card, userId) {
   const urls = lineItemId ? [found[lineItemId]] : Object.values(found);
   if (!urls.filter(Boolean).length) throw new Error('A Shopify não tem foto cadastrada para este produto.');
   return images.attachRemoteImages(card.id, urls, { userId });
+}
+
+/** Pedido do Shopify ligado ao card (id do pedido e do item), a partir do external_id "shopify:pedido:item" */
+function orderRef(card) {
+  const [, orderId, lineItemId] = /^shopify:(\d+)(?::(\d+))?/.exec(card?.external_id || '') || [];
+  return orderId ? { orderId, lineItemId } : null;
+}
+
+/** Link do pedido no admin da Shopify (para quem tem acesso à loja) */
+function adminOrderUrl(card, config = getConfig()) {
+  const ref = orderRef(card);
+  return ref && config.shop_domain ? `https://${config.shop_domain}/admin/orders/${ref.orderId}` : null;
+}
+
+/**
+ * Troca o link dos cards antigos (admin da Shopify) pelo link aberto do pedido, o mesmo que o cliente recebe
+ * (ex.: https://account.sualoja.com.br/orders/…). Busca até 50 pedidos por consulta.
+ */
+async function refreshOrderLinks(config = getConfig(), userId = null) {
+  const rows = q.all("SELECT id, board_id, external_id, external_url FROM cards WHERE external_id LIKE 'shopify:%'");
+  const byOrder = new Map();
+  for (const r of rows) {
+    const ref = orderRef(r);
+    if (ref) (byOrder.get(ref.orderId) || byOrder.set(ref.orderId, []).get(ref.orderId)).push(r);
+  }
+  const ids = [...byOrder.keys()];
+  let updated = 0;
+  let missing = 0;
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    const data = await graphql(config, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id statusPageUrl } } }`,
+      { ids: chunk.map((id) => `gid://shopify/Order/${id}`) });
+    const found = Object.fromEntries((data.nodes || []).filter((n) => n?.statusPageUrl).map((n) => [gidToId(n.id), n.statusPageUrl]));
+    for (const id of chunk) {
+      if (!found[id]) { missing += byOrder.get(id).length; continue; }
+      for (const card of byOrder.get(id)) {
+        if (card.external_url === found[id]) continue;
+        q.run('UPDATE cards SET external_url = ? WHERE id = ?', found[id], card.id);
+        updated++;
+      }
+    }
+  }
+  if (updated) {
+    for (const boardId of new Set(rows.map((r) => r.board_id))) logActivity(boardId, null, userId, 'shopify.links', { cards: updated });
+  }
+  return { cards: rows.length, updated, missing };
 }
 
 /**
@@ -470,7 +518,7 @@ async function graphql(config, query, variables = {}) {
 }
 
 const ORDER_FIELDS = `
-  id legacyResourceId name createdAt note email phone currencyCode displayFinancialStatus
+  id legacyResourceId name createdAt note email phone currencyCode displayFinancialStatus statusPageUrl
   customAttributes { key value }
   totalPriceSet { shopMoney { amount } }
   customer { firstName lastName defaultEmailAddress { emailAddress } defaultPhoneNumber { phoneNumber } }
@@ -521,4 +569,5 @@ async function registerWebhook(config, callbackUrl) {
 module.exports = {
   SOURCES, getConfig, verifyHmac, normalizeRestOrder, normalizeGraphqlOrder, matchLineItem, buildCards,
   importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, attachOrderImages, DEFAULT_API_VERSION, authorizeUrl, verifyCallback, exchangeCode,
+  refreshOrderLinks, adminOrderUrl,
 };
