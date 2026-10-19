@@ -581,6 +581,8 @@ tr.clickable:hover { background: var(--surface-2); }
 body.dragging .card, body.dragging .cal-chip, body.dragging .column, body.dragging .cal-day { transition: none !important; }
 body.dragging .card:hover, body.dragging .cal-chip:hover, body.dragging .column.collapsed:hover { transform: none; box-shadow: var(--shadow-sm); }
 body.dragging { cursor: grabbing; }
+/* Durante o arraste as colunas não "encaixam" na tela (o encaixe desfazia a rolagem automática no celular) */
+body.dragging .board { scroll-snap-type: none; }
 body.dragging .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(255, 255, 255, .9); }
 /* Listas que rolam: rolagem suave e isolada (não "puxa" a página toda no iPad) */
 .cards, .cal-side, .board, .calendar { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }

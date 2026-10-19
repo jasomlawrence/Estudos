@@ -21,7 +21,72 @@ export const DRAG_OPTIONS = {
   animation: 180,
   easing: 'cubic-bezier(.2, .8, .2, 1)',
   onChoose: () => navigator.vibrate?.(8), // leve vibração quando o card "gruda" no dedo (Android)
+  scroll: false, // a rolagem perto das bordas é feita por startEdgeScroll (mais suave)
 };
+/**
+ * Rolagem automática enquanto arrasta perto da borda de uma área rolável (quadro, coluna, calendário).
+ * Roda a cada quadro de animação, com velocidade que cresce conforme o dedo/mouse chega perto da borda.
+ * Substitui a rolagem do Sortable, que andava aos solavancos e, no celular, brigava com o "encaixe"
+ * das colunas (scroll-snap) e não saía do lugar. Devolve a função que encerra a rolagem.
+ */
+export function startEdgeScroll() {
+  let x = null;
+  let y = null;
+  let frame = 0;
+  const onMove = (e) => {
+    const p = e.touches ? e.touches[0] : e;
+    if (p) { x = p.clientX; y = p.clientY; }
+  };
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const MAX = 16; // px por quadro (~960 px/s) bem colado na borda
+  const velocity = (distStart, distEnd, zone) => {
+    if (distStart < zone) return -Math.ceil(MAX * ((zone - Math.max(distStart, 0)) / zone) ** 2);
+    if (distEnd < zone) return Math.ceil(MAX * ((zone - Math.max(distEnd, 0)) / zone) ** 2);
+    return 0;
+  };
+  const step = () => {
+    frame = requestAnimationFrame(step);
+    if (x === null) return;
+    for (let el = document.elementFromPoint(x, y); el && el !== document.body; el = el.parentElement) {
+      const overX = el.scrollWidth > el.clientWidth + 1;
+      const overY = el.scrollHeight > el.clientHeight + 1;
+      if (!overX && !overY) continue;
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (overX && /auto|scroll/.test(cs.overflowX)) {
+        const dx = velocity(x - r.left, r.right - x, clamp(r.width * 0.16, 36, 90));
+        if (dx) el.scrollLeft += dx;
+      }
+      if (overY && /auto|scroll/.test(cs.overflowY)) {
+        const dy = velocity(y - r.top, r.bottom - y, clamp(r.height * 0.12, 30, 70));
+        if (dy) el.scrollTop += dy;
+      }
+    }
+  };
+  document.addEventListener('touchmove', onMove, { passive: true });
+  document.addEventListener('mousemove', onMove, { passive: true });
+  frame = requestAnimationFrame(step);
+  return () => {
+    cancelAnimationFrame(frame);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('mousemove', onMove);
+  };
+}
+
+let stopEdgeScroll = null;
+export function dragStarted() {
+  state.dragging = true;
+  document.body.classList.add('dragging');
+  stopEdgeScroll?.();
+  stopEdgeScroll = startEdgeScroll();
+}
+export function dragEnded() {
+  state.dragging = false;
+  document.body.classList.remove('dragging');
+  stopEdgeScroll?.();
+  stopEdgeScroll = null;
+}
+
 // Chamados depois de cada recarga do quadro (ex.: o calendário se atualiza junto)
 export const boardLoadedHooks = [];
 
@@ -264,10 +329,9 @@ function setupSortables(list) {
     draggable: '.column',
     filter: 'input,button',
     preventOnFilter: false,
-    onStart: () => { state.dragging = true; document.body.classList.add('dragging'); },
+    onStart: dragStarted,
     onEnd: async (evt) => {
-      state.dragging = false;
-      document.body.classList.remove('dragging');
+      dragEnded();
       if (evt.oldIndex !== evt.newIndex) {
         const id = evt.item.dataset.columnId;
         const prevId = evt.item.previousElementSibling?.dataset.columnId;
@@ -286,11 +350,9 @@ function setupSortables(list) {
       ghostClass: 'card-ghost',
       chosenClass: 'card-chosen',
       dragClass: 'card-drag',
-      scroll: true, bubbleScroll: true, scrollSensitivity: 80, scrollSpeed: 14,
-      onStart: () => { state.dragging = true; document.body.classList.add('dragging'); },
+      onStart: dragStarted,
       onEnd: async (evt) => {
-        state.dragging = false;
-        document.body.classList.remove('dragging');
+        dragEnded();
         const id = Number(evt.item.dataset.cardId);
         const columnId = Number(evt.to.dataset.columnId);
         if (evt.from === evt.to && evt.oldIndex === evt.newIndex) return afterDrag();
