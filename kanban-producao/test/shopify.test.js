@@ -118,3 +118,15 @@ test('normaliza o domínio da loja', () => {
   assert.strictEqual(shopify.normalizeShopDomain('Atelie-Joias'), 'atelie-joias.myshopify.com');
   assert.strictEqual(shopify.normalizeShopDomain('https://atelie-joias.myshopify.com/admin'), 'atelie-joias.myshopify.com');
 });
+
+test('erros da Shopify viram mensagens claras (em vez de "erro interno")', async () => {
+  const config = { shop_domain: 'atelie.myshopify.com', access_token: 'shpat_x', api_version: '2026-10' };
+  global.fetch = async () => { const e = new TypeError('fetch failed'); e.cause = { code: 'ENOTFOUND' }; throw e; };
+  await assert.rejects(shopify.graphql(config, '{ shop { name } }'), /não foi encontrada/);
+  global.fetch = async () => ({ ok: false, status: 401, json: async () => ({ errors: '[API] Invalid API key or access token' }) });
+  await assert.rejects(shopify.graphql(config, '{ shop { name } }'), /não aceitou as credenciais/);
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ errors: [{ message: 'Access denied for orders field.' }] }) });
+  await assert.rejects(shopify.graphql(config, '{ shop { name } }'), /Acesso negado.*read_orders/);
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new Error('html'); } });
+  await assert.rejects(shopify.graphql(config, '{ shop { name } }'), /resposta inesperada/);
+});
