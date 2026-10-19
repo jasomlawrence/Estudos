@@ -437,6 +437,14 @@ router.post('/cards/:id/correios', wrap(async (req, res) => {
   res.json({ ...r, card: cards.cardDetail(card.id) });
 }));
 
+// Busca a foto do produto do pedido no Shopify e anexa ao card (vira capa se não houver)
+router.post('/cards/:id/shopify-images', external(async (req, res) => {
+  const card = q.get('SELECT * FROM cards WHERE id = ?', req.params.id);
+  if (!card) throw httpError(404, 'Card não encontrado.');
+  const added = await shopify.attachOrderImages(card, req.user.id);
+  res.json({ added, card: cards.cardDetail(card.id) });
+}));
+
 router.post('/cards/:id/notify', external(async (req, res) => {
   const card = q.get('SELECT * FROM cards WHERE id = ?', req.params.id);
   if (!card) throw httpError(404, 'Card não encontrado.');

@@ -169,6 +169,10 @@ const cardColumns = db.prepare('PRAGMA table_info(cards)').all().map((c) => c.na
 for (const [col, type] of [['shipping_zip', 'TEXT'], ['promised_date', 'TEXT'], ['correios_days', 'INTEGER'], ['correios_service', 'TEXT']]) {
   if (!cardColumns.includes(col)) db.exec(`ALTER TABLE cards ADD COLUMN ${col} ${type}`);
 }
+// Endereço de origem das imagens baixadas automaticamente (evita anexar a mesma foto duas vezes)
+if (!db.prepare('PRAGMA table_info(attachments)').all().some((c) => c.name === 'source_url')) {
+  db.exec('ALTER TABLE attachments ADD COLUMN source_url TEXT');
+}
 
 // Visual pastel (v2): troca as cores padrão antigas pelas novas, sem tocar nas cores escolhidas pelo usuário
 const DEFAULT_BACKGROUND = 'g:aurora';
