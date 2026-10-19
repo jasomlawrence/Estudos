@@ -3,6 +3,7 @@ import { h, clear, textColorFor, colorPicker, PALETTE, copyText, avatar, BACKGRO
 import { get, post, patch, put, del, attempt, modal, confirmDialog, toast } from './api.js';
 import { state, isAdmin } from './state.js';
 import { loadBoard } from './board.js';
+import { automationsPanel } from './automations.js';
 
 const FIELD_TYPES = [
   ['text', 'Texto curto'], ['textarea', 'Texto longo'], ['number', 'Número'], ['currency', 'Valor (R$)'],
@@ -14,7 +15,7 @@ export function openSettings(tab = 'board') {
   const m = modal({ title: 'Configurações', wide: true, className: 'settings-modal', onClose: () => loadBoard() });
   const tabs = [
     ['board', 'Quadro'], ['fields', 'Campos do card'], ['labels', 'Etiquetas'], ['cycle', 'Cronômetro de produção'],
-    ...(isAdmin() ? [['shopify', 'Shopify'], ['correios', 'Correios'], ['sheets', 'Google Planilhas'], ['notifications', 'Notificações'], ['users', 'Usuários']] : []),
+    ...(isAdmin() ? [['automations', 'Automações'], ['shopify', 'Shopify'], ['correios', 'Correios'], ['sheets', 'Google Planilhas'], ['notifications', 'Notificações'], ['users', 'Usuários']] : []),
     ['account', 'Minha conta'],
   ];
   const nav = h('nav', { class: 'tabs' });
@@ -30,6 +31,7 @@ export function openSettings(tab = 'board') {
 }
 
 const PANELS = {
+  automations: automationsPanel,
   // ---------------- Quadro ----------------
   async board(panel) {
     const name = h('input', { value: state.board.name });
@@ -243,7 +245,14 @@ const PANELS = {
             await saveCfg();
             const r = await attempt(() => post('/integrations/shopify/import', { days: Number(days.value) }));
             if (r) { toast(`${r.orders} pedidos lidos, ${r.created} card(s) criados`, 'ok'); loadBoard(); }
-          } }, 'Importar'))));
+          } }, 'Importar')),
+        h('p', { class: 'muted small' }, 'O botão "Abrir pedido" do card leva à página aberta do pedido (a mesma que o cliente recebe, ex.: account.sualoja.com.br/orders/…). Cards criados antes desta versão apontam para o admin; atualize-os aqui:'),
+        h('button', { class: 'btn', onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          const r = await attempt(() => post('/integrations/shopify/refresh-links'));
+          e.currentTarget.disabled = false;
+          if (r) toast(`${r.updated} card(s) atualizados${r.missing ? `, ${r.missing} sem pedido encontrado` : ''}`, 'ok');
+        } }, 'Atualizar links dos pedidos')));
   },
 
   // ---------------- Correios ----------------

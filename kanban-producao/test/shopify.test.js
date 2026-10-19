@@ -175,3 +175,31 @@ test('autorização direta (OAuth): link, assinatura do retorno, troca do códig
   assert.strictEqual(calls[1].get('refresh_token'), 'shprt_1');
   assert.strictEqual(getSetting('shopify').oauth.refresh_token, 'shprt_2');
 });
+
+test('o card leva ao link aberto do pedido (página de status) e cards antigos podem ser atualizados', async () => {
+  const { q, setSetting } = require('../server/db');
+  const STATUS = 'https://account.volpijoias.com.br/orders/becb70a092fcfb1c91da850e08544bf6';
+  const rest = shopify.normalizeRestOrder({ ...order, order_status_url: STATUS }, 'atelie.myshopify.com');
+  const config = { ...shopify.getConfig(), keywords: 'anel de noivado' };
+  assert.strictEqual(shopify.buildCards(rest, config)[0].externalUrl, STATUS);
+  assert.match(shopify.buildCards(shopify.normalizeRestOrder(order, 'atelie.myshopify.com'), config)[0].externalUrl, /\/admin\/orders\//, 'sem link aberto, usa o admin');
+
+  q.run("INSERT INTO users (name, email, password_hash, role) VALUES ('Admin', 'links@a.com', 'x', 'admin')");
+  const boardId = require('../server/routes').seedBoard(1);
+  const col = q.get('SELECT id FROM columns WHERE board_id = ? LIMIT 1', boardId).id;
+  const { createCard, cardDetail } = require('../server/cards');
+  const id = createCard({ columnId: col, title: 'Antigo', source: 'shopify', externalId: 'shopify:777:1', externalUrl: 'https://atelie.myshopify.com/admin/orders/777' }, 1);
+  createCard({ columnId: col, title: 'Sem pedido', source: 'shopify', externalId: 'shopify:888:1', externalUrl: 'x' }, 1);
+  setSetting('shopify', { shop_domain: 'atelie.myshopify.com', access_token: 'shpat_x' });
+  global.fetch = async (url, opts) => {
+    const { variables } = JSON.parse(opts.body);
+    assert.ok(variables.ids.includes('gid://shopify/Order/777') && variables.ids.includes('gid://shopify/Order/888'));
+    return { ok: true, status: 200, json: async () => ({ data: { nodes: [{ id: 'gid://shopify/Order/777', statusPageUrl: STATUS }, null] } }) };
+  };
+  const r = await shopify.refreshOrderLinks();
+  assert.strictEqual(r.updated, 1);
+  assert.ok(r.missing >= 1);
+  const card = cardDetail(id);
+  assert.strictEqual(card.external_url, STATUS);
+  assert.strictEqual(card.admin_url, 'https://atelie.myshopify.com/admin/orders/777');
+});

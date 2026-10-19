@@ -158,6 +158,21 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, read, id);
 
+CREATE TABLE IF NOT EXISTS automations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  trigger TEXT NOT NULL DEFAULT '{"type":"always"}',
+  conditions TEXT NOT NULL DEFAULT '[]',
+  actions TEXT NOT NULL DEFAULT '[]',
+  position REAL NOT NULL DEFAULT 0,
+  run_count INTEGER NOT NULL DEFAULT 0,
+  last_run_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_automations_board ON automations(board_id, position);
+
 CREATE TABLE IF NOT EXISTS notification_log (
   dedupe_key TEXT PRIMARY KEY,
   sent_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))

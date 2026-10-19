@@ -8,6 +8,7 @@ import { openSettings } from './settings.js';
 import { openMetrics } from './metrics.js';
 import { openActivity } from './activity.js';
 import { loadCalendar } from './calendar.js';
+import { loadDashboard } from './dashboard.js';
 
 async function start() {
   const me = await get('/auth/me');
@@ -84,13 +85,17 @@ function renderShell() {
     try { localStorage.setItem('view', view); } catch { /* navegação privada */ }
     $('#board').hidden = view !== 'board';
     $('#calendar').hidden = view !== 'calendar';
+    $('#dashboard').hidden = view !== 'dashboard';
+    search.hidden = view === 'dashboard';
     for (const b of viewSwitch.children) b.classList.toggle('active', b.dataset.view === view);
     if (view === 'calendar' && state.board) loadCalendar();
+    if (view === 'dashboard' && state.board) loadDashboard();
     if (view === 'board' && state.boardStale) loadBoard();
   };
   const viewSwitch = h('div', { class: 'view-switch', role: 'tablist' },
     h('button', { dataset: { view: 'board' }, title: 'Quadro', onclick: () => setView('board') }, icon('kanban', 16), h('span', { class: 'lbl' }, 'Quadro')),
-    h('button', { dataset: { view: 'calendar' }, title: 'Calendário', onclick: () => setView('calendar') }, icon('calendar', 16), h('span', { class: 'lbl' }, 'Calendário')));
+    h('button', { dataset: { view: 'calendar' }, title: 'Calendário', onclick: () => setView('calendar') }, icon('calendar', 16), h('span', { class: 'lbl' }, 'Calendário')),
+    h('button', { dataset: { view: 'dashboard' }, title: 'Painel de produção', onclick: () => setView('dashboard') }, icon('gauge', 16), h('span', { class: 'lbl' }, 'Painel')));
   const bell = h('button', { class: 'top-btn bell', title: 'Notificações', onclick: (e) => openNotifications(e.currentTarget) }, icon('bell', 17), h('span', { class: 'badge-count', id: 'notif-count', hidden: true }));
   const userBtn = h('button', { class: 'top-btn user', onclick: (e) => {
     const pop = popover(e.currentTarget, h('div', { class: 'menu' },
@@ -115,11 +120,12 @@ function renderShell() {
         topBtn('settings', 'Configurações', 'Configurações', () => openSettings()),
         bell, userBtn)),
     h('main', { id: 'board', class: 'board' }),
-    h('main', { id: 'calendar', class: 'calendar', hidden: true }));
+    h('main', { id: 'calendar', class: 'calendar', hidden: true }),
+    h('main', { id: 'dashboard', class: 'dashboard', hidden: true }));
   enableDragScroll($('#board'));
   let saved = 'board';
   try { saved = localStorage.getItem('view') || 'board'; } catch { /* navegação privada */ }
-  setView(saved === 'calendar' ? 'calendar' : 'board');
+  setView(['calendar', 'dashboard'].includes(saved) ? saved : 'board');
 }
 
 // ---------------- Tempo real (Server-Sent Events) ----------------
@@ -137,7 +143,7 @@ function connectEvents() {
     toast(n.message, 'warn');
     refreshNotifications();
     if ('Notification' in window && Notification.permission === 'granted') {
-      const notif = new Notification('Prazo de entrega', { body: n.message, tag: `card-${n.card_id}` });
+      const notif = new Notification(n.title || 'Aviso', { body: n.message, tag: `card-${n.card_id}` });
       notif.onclick = () => { window.focus(); if (n.card_id) openCard(n.card_id); };
     }
   });

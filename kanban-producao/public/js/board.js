@@ -209,14 +209,18 @@ export function cardElement(card) {
   const due = dueBadge(card);
   const timer = card.cycle_started_at ? h('span', { class: `badge ${card.cycle_ended_at ? 'done' : ''}`, title: card.cycle_ended_at ? 'Tempo total de produção' : 'Em produção há' },
     icon('clock', 13), fmtDuration(Date.parse(card.cycle_ended_at || new Date().toISOString()) - Date.parse(card.cycle_started_at))) : null;
+  const hl = card.highlights || [];
+  const style = card.color ? { background: card.color, color: fg, '--card-fg': fg } : {};
+  if (hl.length) style['--hl-ring'] = highlightRing(hl);
   return h('article', {
-    class: `card${card.color ? ' colored' : ''}`, dataset: { cardId: card.id }, tabIndex: 0,
-    style: card.color ? { background: card.color, color: fg, '--card-fg': fg } : {},
+    class: `card${card.color ? ' colored' : ''}${hl.length ? ' highlighted' : ''}`, dataset: { cardId: card.id }, tabIndex: 0, style,
+    title: hl.length ? `Automação: ${hl.map((x) => x.name).join(', ')}` : undefined,
     onclick: () => openCard(card.id),
     onkeydown: (e) => { if (e.key === 'Enter') openCard(card.id); },
   },
   card.cover ? h('img', { class: 'card-cover', src: card.cover, alt: '', loading: 'lazy', decoding: 'async', draggable: false }) : null,
   h('div', { class: 'card-body' },
+    hl.some((x) => x.text) ? h('div', { class: 'card-alerts' }, hl.filter((x) => x.text).map((x) => h('span', { class: 'card-alert', style: { '--hl': x.color } }, x.text))) : null,
     card.labels.length ? h('div', { class: 'card-labels' }, card.labels.map(labelById).filter(Boolean).map((l) => h('span', { class: 'label', style: { background: l.color, color: textColorFor(l.color) }, title: l.name }, l.name))) : null,
     h('div', { class: 'card-title' }, card.title),
     visibleFields.length ? h('dl', { class: 'card-fields' }, visibleFields.map((f) => [h('dt', {}, f.name), h('dd', {}, fieldChip(f, card.fields[f.id]))])) : null,
@@ -226,6 +230,11 @@ export function cardElement(card) {
       card.description ? h('span', { class: 'badge', title: 'Tem descrição' }, icon('text', 13)) : null,
       card.attachment_count ? h('span', { class: 'badge', title: 'Anexos' }, icon('clip', 13), String(card.attachment_count)) : null,
       card.members.length ? h('span', { class: 'card-members' }, card.members.map(userById).filter(Boolean).map((u) => avatar(u, 22))) : null)));
+}
+
+/** Borda colorida por dentro do card: um anel por automação que ele atende (até 3) */
+export function highlightRing(list) {
+  return list.slice(0, 3).map((x, i) => `inset 0 0 0 ${3 * (i + 1)}px ${x.color}`).join(', ');
 }
 
 function fieldChip(def, value) {

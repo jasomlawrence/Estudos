@@ -3,7 +3,7 @@ import { h, $, $$, clear, textColorFor, avatar, fieldText, icon } from './util.j
 import { get, put, patch, attempt, popover, toast } from './api.js';
 import { state, canEdit, userById, labelById, columnById, markLocalEdit } from './state.js';
 import { openCard } from './card.js';
-import { boardLoadedHooks, DRAG_OPTIONS, reloadSoon } from './board.js';
+import { boardLoadedHooks, DRAG_OPTIONS, reloadSoon, highlightRing } from './board.js';
 
 /* global Sortable */
 
@@ -224,9 +224,12 @@ function chip(card, time) {
   const fields = state.fields.filter((f) => show.has(`field:${f.id}`) && card.fields[f.id] != null && card.fields[f.id] !== '');
   const labels = card.labels.map(labelById).filter(Boolean);
   const members = card.members.map(userById).filter(Boolean);
+  const hl = card.highlights || [];
+  const style = { background: bg, color: textColorFor(bg) || '#2a2540' };
+  if (hl.length) style['--hl-ring'] = highlightRing(hl);
   return h('div', {
-    class: `cal-chip${done ? ' done' : ''}${overdue ? ' overdue' : ''}`, dataset: { cardId: card.id }, tabIndex: 0,
-    style: { background: bg, color: textColorFor(bg) || '#2a2540' },
+    class: `cal-chip${done ? ' done' : ''}${overdue ? ' overdue' : ''}${hl.length ? ' highlighted' : ''}`, dataset: { cardId: card.id }, tabIndex: 0,
+    style,
     title: `${card.title}${col ? ` · ${col.name}` : ''}`,
     onclick: () => openCard(card.id),
     onkeydown: (e) => { if (e.key === 'Enter') openCard(card.id); },
