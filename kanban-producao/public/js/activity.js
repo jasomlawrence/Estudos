@@ -38,6 +38,7 @@ export function describe(a, { withCard = false } = {}) {
     case 'field.deleted': return `excluiu o campo ${q(d.name)}`;
     case 'board.created': return `criou o quadro ${q(d.name)}`;
     case 'board.cycle': return `definiu o cronômetro de produção: de ${q(d.start)} até ${q(d.end)}`;
+    case 'card.printed': return `imprimiu a etiqueta${card || ' do card'}${d.template ? ` (${d.template})` : ''}`;
     case 'automation.ran': return `executou a automação ${q(d.rule)}${card}${d.actions ? `: ${d.actions}` : ''}`;
     case 'automation.saved': return `salvou a automação ${q(d.rule)}`;
     case 'automation.deleted': return `excluiu a automação ${q(d.rule)}`;

@@ -58,6 +58,9 @@ app.use('/api', router);
 // Anexos só para usuários logados
 app.use('/uploads', (req, res, next) => (req.user ? next() : res.status(401).end()), express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
 app.use('/vendor/sortable', express.static(path.dirname(require.resolve('sortablejs/Sortable.min.js'))));
+// QR code e código de barras das etiquetas de impressão
+app.use('/vendor/qrcode', express.static(path.dirname(require.resolve('qrcode-generator'))));
+app.use('/vendor/jsbarcode', express.static(path.join(path.dirname(require.resolve('jsbarcode/package.json')), 'dist')));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.use((err, req, res, _next) => {

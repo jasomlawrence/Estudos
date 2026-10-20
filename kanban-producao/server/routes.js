@@ -13,6 +13,7 @@ const sheets = require('./sheets');
 const notifications = require('./notifications');
 const correios = require('./correios');
 const automations = require('./automations');
+const print = require('./print');
 const { cycleMs, stats, columnDurations, resolveCycleColumns } = require('./cycle');
 
 const router = express.Router();
@@ -412,6 +413,84 @@ router.post('/cards/:id/move', (req, res) => {
   cards.moveCard(Number(req.params.id), { columnId: Number(req.body.columnId), prevId: req.body.prevId, nextId: req.body.nextId }, req.user.id);
   // Devolve o card atualizado para a tela trocar só ele, sem redesenhar o quadro inteiro
   res.json(cards.serializeCards([q.get('SELECT * FROM cards WHERE id = ?', Number(req.params.id))])[0]);
+});
+
+// ---------------- Seleção de vários cards ----------------
+const MAX_BULK = 500;
+const idList = (v) => [...new Set((Array.isArray(v) ? v : String(v || '').split(',')).map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, MAX_BULK);
+
+// Todos os ids de uma coluna (inclusive os que ainda não apareceram na rolagem), para "selecionar a coluna"
+router.get('/columns/:id/card-ids', (req, res) => {
+  const col = q.get('SELECT * FROM columns WHERE id = ?', req.params.id);
+  if (!col) throw httpError(404, 'Coluna não encontrada.');
+  const filter = cardFilter(String(req.query.q || '').trim());
+  const archived = req.query.archived === '1' ? 1 : 0;
+  res.json(q.all(`SELECT c.id FROM cards c WHERE c.column_id = ? AND c.archived = ? ${filter.sql} ORDER BY c.position LIMIT ${MAX_BULK}`, col.id, archived, ...filter.params).map((r) => r.id));
+});
+
+// Dados completos de cards escolhidos (para imprimir etiquetas), na ordem do quadro
+router.get('/boards/:id/cards', (req, res) => {
+  const board = boardOr404(req.params.id);
+  const ids = idList(req.query.ids);
+  if (!ids.length) return res.json([]);
+  const rows = q.all(`SELECT c.* FROM cards c JOIN columns col ON col.id = c.column_id
+                      WHERE c.board_id = ? AND c.id IN (${ids.map(() => '?').join(',')}) ORDER BY col.position, c.position`, board.id, ...ids);
+  res.json(cards.serializeCards(rows));
+});
+
+// Ações em lote: mover, etiqueta, responsável, arquivar
+router.post('/cards/bulk', (req, res) => {
+  const ids = idList(req.body.ids);
+  if (!ids.length) throw httpError(400, 'Selecione pelo menos um card.');
+  // Mantém a ordem em que os cards estavam no quadro
+  const rows = q.all(`SELECT c.* FROM cards c JOIN columns col ON col.id = c.column_id WHERE c.id IN (${ids.map(() => '?').join(',')}) ORDER BY col.position, c.position`, ...ids);
+  const { action } = req.body;
+  const target = Number(req.body.value);
+  let done = 0;
+  for (const card of rows) {
+    if (action === 'move') {
+      if (card.column_id === target) continue;
+      cards.moveCard(card.id, { columnId: target }, req.user.id);
+    } else if (action === 'add_label' || action === 'remove_label') {
+      const labels = q.all('SELECT label_id FROM card_labels WHERE card_id = ?', card.id).map((l) => l.label_id);
+      const has = labels.includes(target);
+      if (action === 'add_label' ? has : !has) continue;
+      cards.updateCard(card.id, { labels: action === 'add_label' ? [...labels, target] : labels.filter((l) => l !== target) }, req.user.id);
+    } else if (action === 'add_member' || action === 'remove_member') {
+      const members = q.all('SELECT user_id FROM card_members WHERE card_id = ?', card.id).map((m) => m.user_id);
+      const has = members.includes(target);
+      if (action === 'add_member' ? has : !has) continue;
+      cards.updateCard(card.id, { members: action === 'add_member' ? [...members, target] : members.filter((m) => m !== target) }, req.user.id);
+    } else if (action === 'archive' || action === 'unarchive') {
+      if (!!card.archived === (action === 'archive')) continue;
+      cards.updateCard(card.id, { archived: action === 'archive' }, req.user.id);
+    } else {
+      throw httpError(400, 'Ação inválida.');
+    }
+    done++;
+  }
+  res.json({ updated: done, total: rows.length });
+});
+
+// ---------------- Etiquetas de impressão ----------------
+router.get('/boards/:id/print-templates', (req, res) => {
+  const board = boardOr404(req.params.id);
+  res.json(print.getTemplates(board.id));
+});
+
+router.put('/boards/:id/print-templates', (req, res) => {
+  const board = boardOr404(req.params.id);
+  res.json(print.saveTemplates(board.id, req.body));
+});
+
+// Registra no histórico de cada card que a etiqueta foi impressa
+router.post('/cards/printed', (req, res) => {
+  const ids = idList(req.body.ids);
+  const template = String(req.body.template || '').slice(0, 80);
+  for (const card of ids.map((id) => q.get('SELECT id, board_id FROM cards WHERE id = ?', id)).filter(Boolean)) {
+    logActivity(card.board_id, card.id, req.user.id, 'card.printed', { template });
+  }
+  res.json({ ok: true });
 });
 
 router.delete('/cards/:id', (req, res) => {

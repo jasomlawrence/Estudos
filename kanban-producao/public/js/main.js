@@ -9,6 +9,7 @@ import { openMetrics } from './metrics.js';
 import { openActivity } from './activity.js';
 import { loadCalendar } from './calendar.js';
 import { loadDashboard } from './dashboard.js';
+import { setSelecting } from './selection.js';
 
 async function start() {
   const me = await get('/auth/me');
@@ -72,6 +73,8 @@ function renderShell() {
     oninput: debounce((e) => { state.search = e.target.value.trim(); state.columns = []; loadBoard({ keepScroll: false }); }, 300) });
   const search = h('label', { class: 'search' }, icon('search', 16), searchInput);
   const topBtn = (name, label, title, onclick) => h('button', { class: 'top-btn', title, onclick }, icon(name, 17), h('span', { class: 'lbl' }, label));
+  const selectBtn = topBtn('select', 'Selecionar', 'Selecionar vários cards (imprimir etiquetas, mover, etiquetar…)', () => setSelecting(!state.selecting));
+  selectBtn.id = 'select-btn';
   const archivedBtn = topBtn('archive', 'Arquivados', 'Mostrar cards arquivados', () => {
     state.archived = !state.archived;
     archivedBtn.classList.toggle('active', state.archived);
@@ -86,6 +89,8 @@ function renderShell() {
     $('#board').hidden = view !== 'board';
     $('#calendar').hidden = view !== 'calendar';
     $('#dashboard').hidden = view !== 'dashboard';
+    selectBtn.hidden = view !== 'board';
+    if (view !== 'board' && state.selecting) setSelecting(false);
     search.hidden = view === 'dashboard';
     for (const b of viewSwitch.children) b.classList.toggle('active', b.dataset.view === view);
     if (view === 'calendar' && state.board) loadCalendar();
@@ -114,6 +119,7 @@ function renderShell() {
       viewSwitch,
       search,
       h('div', { class: 'top-actions' },
+        selectBtn,
         topBtn('clock', 'Produção', 'Tempo de produção', () => openMetrics(openCard)),
         topBtn('history', 'Atividade', 'Histórico de alterações', () => openActivity(openCard)),
         archivedBtn,
