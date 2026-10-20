@@ -3,7 +3,7 @@ import { h, $, $$, clear, textColorFor, avatar, fieldText, icon } from './util.j
 import { get, put, patch, attempt, popover, toast } from './api.js';
 import { state, canEdit, userById, labelById, columnById, markLocalEdit } from './state.js';
 import { openCard } from './card.js';
-import { boardLoadedHooks, DRAG_OPTIONS, reloadSoon, highlightRing } from './board.js';
+import { boardLoadedHooks, DRAG_OPTIONS, reloadSoon, highlightRing, dragStarted, dragEnded } from './board.js';
 
 /* global Sortable */
 
@@ -261,11 +261,9 @@ function setupDrag(root, enabled) {
       ...DRAG_OPTIONS,
       group: 'calendar', sort: false, draggable: '.cal-chip',
       ghostClass: 'card-ghost', dragClass: 'card-drag',
-      scroll: true, bubbleScroll: true, scrollSensitivity: 80, scrollSpeed: 14,
-      onStart: () => { state.dragging = true; document.body.classList.add('dragging'); },
+      onStart: dragStarted,
       onEnd: async (evt) => {
-        state.dragging = false;
-        document.body.classList.remove('dragging');
+        dragEnded();
         if (evt.from === evt.to) return;
         const id = Number(evt.item.dataset.cardId);
         const card = [...cal.data.cards, ...cal.data.undated].find((c) => c.id === id);
