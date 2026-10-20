@@ -772,13 +772,22 @@ body.dragging .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; ba
 
 /* ---------- Seleção de vários cards ---------- */
 .top-btn.active { background: var(--primary); color: #fff; }
+/* "Selecionar" sempre com o nome (em telas médias os outros botões ficam só com ícone) */
+.top-actions #select-btn .lbl { display: inline !important; }
+.top-actions #select-btn { padding: 8px 12px !important; }
+@media (max-width: 760px) { .top-actions #select-btn .lbl { display: none !important; } .top-actions #select-btn { padding: 8px !important; } }
 .card-check {
-  position: absolute; top: 8px; left: 8px; z-index: 2; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center;
-  background: rgba(255, 255, 255, .95); box-shadow: inset 0 0 0 2px #b9b4cc; color: transparent; transition: background .12s, box-shadow .12s;
+  position: absolute; top: 8px; right: 8px; z-index: 2; width: 24px; height: 24px; border-radius: 7px; display: none; place-items: center;
+  border: 0; padding: 0; cursor: pointer; background: rgba(255, 255, 255, .95); box-shadow: inset 0 0 0 2px #b9b4cc, 0 1px 3px rgba(42, 37, 64, .15);
+  color: transparent; transition: background .12s, box-shadow .12s;
 }
+.card-check:hover { box-shadow: inset 0 0 0 2px var(--primary), 0 1px 3px rgba(42, 37, 64, .15); color: #c9c2ff; }
+body.selecting .card-check { display: grid; }
+@media (hover: hover) { .card:hover .card-check { display: grid; } }
+body.dragging .card-check { display: none !important; }
 body.selecting .card { cursor: pointer; }
-body.selecting .card .card-body { padding-left: 38px; }
-body.selecting .card .card-cover + .card-body { padding-left: 12px; }
+body.selecting .card .card-body { padding-right: 40px; }
+body.selecting .card .card-cover + .card-body { padding-right: 12px; }
 .card.selected { box-shadow: 0 0 0 2.5px var(--primary), var(--shadow-sm); }
 .card.selected .card-check { background: var(--primary); box-shadow: none; color: #fff; }
 .col-select {

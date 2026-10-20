@@ -3,7 +3,7 @@ import { h, $, $$, clear, textColorFor, fmtShortDate, fmtDuration, avatar, field
 import { get, post, patch, del, attempt, popover, confirmDialog, toast } from './api.js';
 import { state, canEdit, userById, labelById, columnById, markLocalEdit } from './state.js';
 import { openCard } from './card.js';
-import { toggleCard, toggleColumn, columnFullySelected, isSelected } from './selection.js';
+import { toggleCard, toggleColumn, columnFullySelected, isSelected, setSelecting } from './selection.js';
 import { openPrint } from './print.js';
 
 /* global Sortable */
@@ -295,7 +295,11 @@ export function cardElement(card) {
     onclick: () => (state.selecting ? toggleCard(card) : openCard(card.id)),
     onkeydown: (e) => { if (e.key === 'Enter') (state.selecting ? toggleCard(card) : openCard(card.id)); },
   },
-  state.selecting ? h('span', { class: 'card-check', 'aria-hidden': 'true' }, icon('check', 14)) : null,
+  // Caixinha de seleção: sempre visível no modo "Selecionar"; fora dele aparece ao passar o mouse e já liga o modo
+  h('button', {
+    class: 'card-check', type: 'button', title: 'Selecionar este card', 'aria-label': 'Selecionar este card', tabIndex: state.selecting ? 0 : -1,
+    onclick: (e) => { e.stopPropagation(); if (!state.selecting) setSelecting(true); toggleCard(card); },
+  }, icon('check', 14)),
   card.cover ? h('img', { class: 'card-cover', src: card.cover, alt: '', loading: 'lazy', decoding: 'async', draggable: false }) : null,
   h('div', { class: 'card-body' },
     hl.some((x) => x.text) ? h('div', { class: 'card-alerts' }, hl.filter((x) => x.text).map((x) => h('span', { class: 'card-alert', style: { '--hl': x.color } }, x.text))) : null,
@@ -359,7 +363,8 @@ function setupSortables(list) {
       ...DRAG_OPTIONS,
       group: 'cards',
       draggable: '.card',
-      filter: '.sentinel',
+      filter: '.sentinel, .card-check',
+      preventOnFilter: false,
       ghostClass: 'card-ghost',
       chosenClass: 'card-chosen',
       dragClass: 'card-drag',
