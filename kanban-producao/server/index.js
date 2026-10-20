@@ -18,16 +18,18 @@ app.post('/webhooks/shopify/orders', express.raw({ type: '*/*', limit: '5mb' }),
   const config = shopify.getConfig();
   // Webhooks registrados pelo app são assinados com o Client secret; os criados no admin, com a chave de lá
   const signature = req.get('X-Shopify-Hmac-Sha256');
+  let order = null;
+  try { order = JSON.parse(req.body.toString('utf8')); } catch { /* corpo inválido */ }
   if (![config.client_secret, config.webhook_secret].some((secret) => shopify.verifyHmac(req.body, signature, secret))) {
+    shopify.logOrder({ order, status: 'signature', detail: 'A assinatura do webhook não confere com o Client secret nem com a chave do webhook. Confira o Client secret salvo.' });
     return res.status(401).send('assinatura inválida');
   }
   res.status(200).send('ok'); // responde logo; o Shopify espera no máximo 5 s
-  if (!config.enabled) return;
+  if (!order) return;
+  if (!config.enabled) return shopify.logOrder({ order, status: 'disabled', detail: 'Marque "Integração ativa" em Configurações → Shopify.' });
   const topic = req.get('X-Shopify-Topic') || 'orders/create';
   if (!/^orders\/(create|paid|updated)$/.test(topic)) return;
-  let order;
-  try { order = JSON.parse(req.body.toString('utf8')); } catch { return; }
-  shopify.importOrder(shopify.normalizeRestOrder(order, config.shop_domain || req.get('X-Shopify-Shop-Domain')), config)
+  shopify.importOrder(shopify.normalizeRestOrder(order, config.shop_domain || req.get('X-Shopify-Shop-Domain')), config, null, { source: 'webhook' })
     .then((n) => n && console.log(`[shopify] pedido ${order.name}: ${n} card(s) criado(s)`))
     .catch((err) => console.error('[shopify]', err.message));
 });
