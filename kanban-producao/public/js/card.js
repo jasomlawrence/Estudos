@@ -1,5 +1,6 @@
 // Janela de detalhes do card: campos personalizados, anexos/capa, cor, etiquetas, histórico, tempo de produção
-import { h, $, clear, textColorFor, fmtDateTime, fmtDuration, avatar, toLocalInput, colorPicker, PALETTE, copyText, icon } from './util.js';
+import { h, $, clear, textColorFor, fmtDateTime, fmtDuration, avatar, toLocalInput, colorPicker, PALETTE, copyText, icon, checklistItems } from './util.js';
+import { commentsPanel } from './comments.js';
 import { get, post, patch, del, api, attempt, modal, popover, confirmDialog, toast } from './api.js';
 import { openPrint } from './print.js';
 import { state, canEdit, userById, labelById } from './state.js';
@@ -14,7 +15,7 @@ export async function openCard(id) {
   if (!card) return;
   current?.modal.close();
   const m = modal({ wide: true, className: 'card-modal', onClose: () => { if (current?.modal === m) current = null; state.openCardId = null; history.replaceState(null, '', location.pathname); } });
-  current = { card, modal: m };
+  current = { card, modal: m, comments: commentsPanel(card.id) };
   state.openCardId = id;
   history.replaceState(null, '', `#card=${id}`);
   m.el.addEventListener('paste', onPaste);
@@ -22,6 +23,9 @@ export async function openCard(id) {
 }
 
 /** Atualiza a janela se outra pessoa alterou o card (sem atrapalhar quem está digitando) */
+/** Bloco de comentários do card aberto (o tempo real atualiza quando alguém comenta) */
+export const openCommentsPanel = () => current?.comments || null;
+
 export async function refreshOpenCard(cardIds = []) {
   if (!current || (cardIds.length && !cardIds.includes(current.card.id))) return;
   const active = document.activeElement;
@@ -82,6 +86,7 @@ function render() {
         h('section', {},
           h('h3', {}, 'Descrição'),
           h('textarea', { class: 'description', rows: 4, placeholder: 'Detalhes, observações da produção…', value: card.description, readOnly: !editable, dataset: { key: 'description' }, onchange: (e) => save({ description: e.target.value }) })),
+        current.comments.el,
         attachmentsSection(card, editable),
         state.correiosEnabled || card.shipping_zip ? shippingSection(card, editable) : null,
         productionSection(card),
@@ -191,7 +196,7 @@ function fieldsSection(card, editable) {
   if (!state.fields.length) return h('section', {}, h('h3', {}, 'Campos'), h('p', { class: 'muted' }, 'Nenhum campo personalizado. Crie em Configurações → Campos.'));
   return h('section', {},
     h('h3', {}, 'Campos'),
-    h('div', { class: 'fields-grid' }, state.fields.map((f) => h('label', { class: `field field-${f.type}` },
+    h('div', { class: 'fields-grid' }, state.fields.map((f) => h(['checklist', 'multiselect'].includes(f.type) ? 'div' : 'label', { class: `field field-${f.type}` },
       h('span', { class: 'field-name' }, f.name),
       fieldInput(f, card.fields[f.id], editable, (value) => save({ fields: { [f.id]: value } }))))));
 }
@@ -223,6 +228,8 @@ function fieldInput(def, value, editable, onSave) {
         onclick: (e) => { e.preventDefault(); selected.has(o.id) ? selected.delete(o.id) : selected.add(o.id); onSave([...selected]); },
       }, o.label)));
     }
+    case 'checklist':
+      return checklistInput(def, value, editable, onSave);
     case 'url':
       return h('div', { class: 'row' }, h('input', { ...common, type: 'url', value: value ?? '', placeholder: 'https://', onchange: (e) => onSave(e.target.value) }),
         value ? h('a', { href: value, target: '_blank', rel: 'noopener', class: 'icon-btn', title: 'Abrir' }, '↗') : null);
@@ -237,6 +244,29 @@ function fieldInput(def, value, editable, onSave) {
     default:
       return h('input', { ...common, type: 'text', value: value ?? '', onchange: (e) => onSave(e.target.value) });
   }
+}
+
+/** Lista de verificação: itens do modelo (definidos no campo) + itens só deste card */
+function checklistInput(def, value, editable, onSave) {
+  const items = checklistItems(def, value);
+  const done = items.filter((i) => i.done).length;
+  const state0 = () => ({ done: items.filter((i) => i.done).map((i) => i.id), extra: items.filter((i) => i.extra).map(({ id, label }) => ({ id, label })) });
+  const commit = () => onSave(state0());
+  const pct = items.length ? Math.round((done / items.length) * 100) : 0;
+  const newItem = h('input', { placeholder: '+ Item só deste card', dataset: { key: `checklist-new-${def.id}` }, onkeydown: (e) => {
+    if (e.key !== 'Enter' || !e.target.value.trim()) return;
+    e.preventDefault();
+    items.push({ id: Math.random().toString(36).slice(2, 10), label: e.target.value.trim(), extra: true, done: false });
+    commit();
+  } });
+  return h('div', { class: 'checklist' },
+    items.length ? h('div', { class: `checklist-progress${done === items.length ? ' complete' : ''}` },
+      h('div', { class: 'bar' }, h('span', { style: { width: `${pct}%` } })), h('small', {}, `${done}/${items.length}`)) : null,
+    h('ul', {}, items.map((it) => h('li', { class: it.done ? 'done' : '' },
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: it.done, disabled: !editable, onchange: (e) => { it.done = e.target.checked; commit(); } }), ` ${it.label}`),
+      it.extra && editable ? h('button', { class: 'icon-btn', title: 'Remover item', onclick: () => { items.splice(items.indexOf(it), 1); commit(); } }, icon('x', 12)) : null))),
+    editable ? newItem : null,
+    !items.length && !editable ? h('span', { class: 'muted small' }, 'Sem itens') : null);
 }
 
 // ---------- Anexos e capa ----------
@@ -354,7 +384,6 @@ function sidebar(card, editable, col) {
     h('h4', {}, 'Ações'),
     card.external_url ? h('a', { class: 'btn block', href: card.external_url, target: '_blank', rel: 'noopener' }, icon('bag'), 'Abrir pedido') : null,
     card.external_url ? h('button', { class: 'btn block', onclick: () => { copyText(card.external_url); toast('Link do pedido copiado', 'ok'); } }, icon('link'), 'Copiar link do pedido') : null,
-    card.admin_url && card.admin_url !== card.external_url ? h('a', { class: 'btn block subtle', href: card.admin_url, target: '_blank', rel: 'noopener' }, icon('bag'), 'Ver no admin da Shopify') : null,
     editable && card.source === 'shopify' ? h('button', { class: 'btn block', onclick: async (e) => {
       e.currentTarget.disabled = true;
       const r = await attempt(() => post(`/cards/${card.id}/shopify-images`));

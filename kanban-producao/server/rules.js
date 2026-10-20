@@ -7,6 +7,11 @@ const isEmpty = (v) => v === null || v === undefined || v === '' || (Array.isArr
 
 /** O valor do campo atende à comparação? (op: filled, empty, equals, not_equals, contains, gt, lt) */
 function fieldMatches(def, value, op, expected) {
+  if (def?.type === 'checklist') {
+    const total = def.options.length + (value?.extra?.length || 0);
+    const done = value?.done?.length || 0;
+    return { complete: total > 0 && done >= total, incomplete: done < total, filled: done > 0, empty: done === 0 }[op] ?? false;
+  }
   if (op === 'filled') return !isEmpty(value);
   if (op === 'empty') return isEmpty(value);
   if (!def || isEmpty(value)) return op === 'not_equals' && !isEmpty(expected);

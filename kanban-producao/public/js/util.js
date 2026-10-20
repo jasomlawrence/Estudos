@@ -80,6 +80,9 @@ const ICONS = {
   trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
   restore: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
   play: '<path d="M6 3l14 9-14 9Z"/>',
+  chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  checklist: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
+  sort: '<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/>',
   printer: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/>',
   select: '<rect width="18" height="18" x="3" y="3" rx="3"/><path d="m8 12 3 3 5-6"/>',
   tag: '<path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
@@ -170,6 +173,18 @@ export function debounce(fn, ms) {
 }
 
 /** Exibe um valor de campo personalizado como texto */
+/** Itens de um campo checklist (os do modelo + os só deste card) e quantos estão marcados */
+export function checklistItems(def, value) {
+  const done = new Set(value?.done || []);
+  const items = [...def.options.map((o) => ({ id: o.id, label: o.label, extra: false })), ...(value?.extra || []).map((x) => ({ ...x, extra: true }))]
+    .map((it) => ({ ...it, done: done.has(it.id) }));
+  return items;
+}
+export function checklistProgress(def, value) {
+  const items = checklistItems(def, value);
+  return { done: items.filter((i) => i.done).length, total: items.length };
+}
+
 export function fieldText(def, value) {
   if (value === null || value === undefined || value === '') return '';
   switch (def.type) {
@@ -180,6 +195,7 @@ export function fieldText(def, value) {
     case 'datetime': return fmtDateTime(value);
     case 'select': return def.options.find((o) => o.id === value)?.label ?? '';
     case 'multiselect': return value.map((id) => def.options.find((o) => o.id === id)?.label).filter(Boolean).join(', ');
+    case 'checklist': { const p = checklistProgress(def, value); return p.total ? `${p.done}/${p.total}` : ''; }
     default: return String(value);
   }
 }

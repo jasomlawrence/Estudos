@@ -1,4 +1,5 @@
 // Configurações: quadro, campos, etiquetas, cronômetro, Shopify, Google Planilhas, notificações, usuários
+/* global Sortable */
 import { h, clear, textColorFor, colorPicker, PALETTE, copyText, avatar, BACKGROUNDS, backgroundCss, icon } from './util.js';
 import { get, post, patch, put, del, attempt, modal, confirmDialog, toast } from './api.js';
 import { state, isAdmin } from './state.js';
@@ -9,7 +10,7 @@ import { printSettingsPanel } from './print.js';
 const FIELD_TYPES = [
   ['text', 'Texto curto'], ['textarea', 'Texto longo'], ['number', 'Número'], ['currency', 'Valor (R$)'],
   ['date', 'Data'], ['datetime', 'Data e hora'], ['checkbox', 'Sim / Não'], ['select', 'Lista de opções'],
-  ['multiselect', 'Múltipla escolha'], ['url', 'Link'], ['email', 'E-mail'], ['phone', 'Telefone / WhatsApp'],
+  ['multiselect', 'Múltipla escolha'], ['checklist', 'Checklist (itens para marcar)'], ['url', 'Link'], ['email', 'E-mail'], ['phone', 'Telefone / WhatsApp'],
 ];
 
 export function openSettings(tab = 'board') {
@@ -65,16 +66,28 @@ const PANELS = {
     const list = h('div', { class: 'field-defs' });
     const redraw = () => PANELS.fields(panel);
     for (const [i, f] of state.fields.entries()) list.append(fieldDefEditor(f, i, redraw));
+    // Arraste pela alça para mudar a ordem dos campos
+    Sortable.create(list, {
+      handle: '.drag-handle', animation: 150, ghostClass: 'card-ghost', forceFallback: true, fallbackOnBody: true,
+      onEnd: async (evt) => {
+        if (evt.oldIndex === evt.newIndex) return;
+        const ids = [...list.children].map((el) => Number(el.dataset.fieldId));
+        if (await attempt(() => put(`/boards/${state.boardId}/fields-order`, { ids }))) {
+          state.fields = ids.map((id) => state.fields.find((f) => f.id === id));
+        }
+      },
+    });
     const newName = h('input', { placeholder: 'Nome do novo campo (ex.: Tamanho do aro)' });
     const newType = h('select', {}, FIELD_TYPES.map(([v, l]) => h('option', { value: v }, l)));
     clear(panel,
       h('h3', {}, 'Campos personalizados dos cards'),
-      h('p', { class: 'muted' }, 'Crie quantos campos quiser. Marque "Mostrar no card" para exibir o valor direto no quadro.'),
+      h('p', { class: 'muted' }, 'Crie quantos campos quiser. Marque "Mostrar no card" para exibir o valor direto no quadro. Arraste pela alça ⋮⋮ para mudar a ordem. O tipo "Checklist" serve de lista de verificação (ex.: itens do controle de qualidade): os itens criados aqui aparecem em todos os cards, e cada card pode ganhar itens extras.'),
       list,
       h('div', { class: 'row add-field' }, newName, newType,
         h('button', { class: 'btn primary', onclick: async () => {
           if (!newName.value.trim()) return toast('Dê um nome ao campo.', 'error');
-          const opts = ['select', 'multiselect'].includes(newType.value) ? [{ label: 'Opção 1', color: PALETTE[0] }] : [];
+          const opts = ['select', 'multiselect'].includes(newType.value) ? [{ label: 'Opção 1', color: PALETTE[0] }]
+            : newType.value === 'checklist' ? [{ label: 'Item 1' }] : [];
           if (await attempt(() => post(`/boards/${state.boardId}/fields`, { name: newName.value, type: newType.value, options: opts, show_on_card: false }), 'Campo criado')) redraw();
         } }, '+ Adicionar campo')));
   },
@@ -537,32 +550,33 @@ function backgroundPicker(current, onPick) {
 function fieldDefEditor(f, index, redraw) {
   const name = h('input', { value: f.name });
   const show = h('input', { type: 'checkbox', checked: f.show_on_card });
+  const hasOptions = ['select', 'multiselect', 'checklist'].includes(f.type);
+  const checklist = f.type === 'checklist';
   let options = f.options.map((o) => ({ ...o }));
-  const optBox = h('div', { class: 'options' });
-  const drawOptions = () => clear(optBox, options.map((o, i) => {
-    const sw = h('button', { class: 'swatch', style: { background: o.color }, onclick: (e) => {
-      const p = colorPicker(o.color, (c) => { o.color = c || '#dfe1e6'; p.remove(); drawOptions(); }, { allowNone: false });
-      e.currentTarget.parentElement.after(p);
-    } });
-    return h('div', { class: 'row' }, sw, h('input', { value: o.label, oninput: (e) => { o.label = e.target.value; } }),
-      h('button', { class: 'icon-btn', title: 'Remover opção', onclick: () => { options.splice(i, 1); drawOptions(); } }, icon('x')));
-  }), h('button', { class: 'btn small', onclick: () => { options.push({ label: `Opção ${options.length + 1}`, color: PALETTE[options.length % 9] }); drawOptions(); } }, '+ Opção'));
-  if (['select', 'multiselect'].includes(f.type)) drawOptions();
-  const move = async (dir) => {
-    const other = state.fields[index + dir];
-    if (!other) return;
-    await patch(`/fields/${f.id}`, { position: other.position });
-    await patch(`/fields/${other.id}`, { position: f.position });
-    redraw();
-  };
-  return h('div', { class: 'field-def' },
+  const optBox = h('div', { class: `options${checklist ? ' checklist-options' : ''}` });
+  const drawOptions = () => clear(optBox,
+    checklist ? h('small', { class: 'muted' }, 'Itens que aparecem em todos os cards:') : null,
+    options.map((o, i) => {
+      const sw = checklist ? h('span', { class: 'check-mark' }, '☐') : h('button', { class: 'swatch', style: { background: o.color }, onclick: (e) => {
+        const p = colorPicker(o.color, (c) => { o.color = c || '#dfe1e6'; p.remove(); drawOptions(); }, { allowNone: false });
+        e.currentTarget.parentElement.after(p);
+      } });
+      return h('div', { class: 'row' }, sw, h('input', { value: o.label, oninput: (e) => { o.label = e.target.value; } }),
+        h('button', { class: 'icon-btn', title: checklist ? 'Remover item' : 'Remover opção', onclick: () => { options.splice(i, 1); drawOptions(); } }, icon('x')));
+    }),
+    h('button', { class: 'btn small', onclick: () => {
+      options.push(checklist ? { label: `Item ${options.length + 1}` } : { label: `Opção ${options.length + 1}`, color: PALETTE[options.length % 9] });
+      drawOptions();
+    } }, checklist ? '+ Item' : '+ Opção'));
+  if (hasOptions) drawOptions();
+  return h('div', { class: 'field-def', dataset: { fieldId: f.id } },
     h('div', { class: 'row' },
-      h('div', { class: 'reorder' }, h('button', { class: 'icon-btn', disabled: index === 0, onclick: () => move(-1) }, '↑'), h('button', { class: 'icon-btn', disabled: index === state.fields.length - 1, onclick: () => move(1) }, '↓')),
+      h('span', { class: 'drag-handle', title: 'Arraste para mudar a ordem' }, '⋮⋮'),
       name,
       h('span', { class: 'chip' }, FIELD_TYPES.find(([v]) => v === f.type)?.[1]),
       h('label', { class: 'check' }, show, ' Mostrar no card'),
       h('button', { class: 'btn small primary', onclick: async () => {
-        if (await attempt(() => patch(`/fields/${f.id}`, { name: name.value, show_on_card: show.checked, options: ['select', 'multiselect'].includes(f.type) ? options : undefined }), 'Campo salvo')) redraw();
+        if (await attempt(() => patch(`/fields/${f.id}`, { name: name.value, show_on_card: show.checked, options: hasOptions ? options : undefined }), 'Campo salvo')) redraw();
       } }, 'Salvar'),
       h('button', { class: 'btn small subtle', onclick: async () => {
         if (await confirmDialog(`Excluir o campo "${f.name}"? Os valores preenchidos em todos os cards serão apagados.`)) { await attempt(() => del(`/fields/${f.id}`)); redraw(); }

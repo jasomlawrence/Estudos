@@ -1,5 +1,5 @@
 // Quadro Kanban: colunas, cards, arrastar e soltar, rolagem infinita
-import { h, $, $$, clear, textColorFor, fmtShortDate, fmtDuration, avatar, fieldText, colorPicker, icon, backgroundCss } from './util.js';
+import { h, $, $$, clear, textColorFor, fmtShortDate, fmtDuration, avatar, fieldText, colorPicker, icon, backgroundCss, checklistProgress } from './util.js';
 import { get, post, patch, del, attempt, popover, confirmDialog, toast } from './api.js';
 import { state, canEdit, userById, labelById, columnById, markLocalEdit } from './state.js';
 import { openCard } from './card.js';
@@ -100,7 +100,7 @@ export async function loadBoard({ keepScroll = true } = {}) {
   if (state.search) params.set('q', state.search);
   if (state.archived) params.set('archived', '1');
   const data = await get(`/boards/${state.boardId}?${params}`);
-  Object.assign(state, { board: data.board, columns: data.columns, labels: data.labels, fields: data.fields, users: data.users, correiosEnabled: data.correios_enabled });
+  Object.assign(state, { board: data.board, columns: data.columns, labels: data.labels, fields: data.fields, users: data.users, correiosEnabled: data.correios_enabled, chatUnread: data.chat_unread || 0 });
   state.boardStale = false;
   renderBoard(keepScroll);
   boardLoadedHooks.forEach((fn) => fn());
@@ -192,6 +192,7 @@ function columnMenu(anchor, col) {
       const ids = await attempt(() => get(`/columns/${col.id}/card-ids${state.archived ? '?archived=1' : ''}`));
       if (ids?.length) openPrint(ids);
     } }, `Imprimir etiquetas da coluna (${col.total})`) : null,
+    col.total > 1 ? h('button', { class: 'menu-item', onclick: () => { pop.close(); sortMenu(anchor, col); } }, icon('sort', 14), ' Ordenar cards…') : null,
     others.length && col.total ? h('div', { class: 'menu-title' }, 'Mover todos os cards para…') : null,
     col.total ? others.map((o) => h('button', { class: 'menu-item indent', onclick: async () => {
       pop.close();
@@ -215,6 +216,30 @@ function columnMenu(anchor, col) {
       }
       reloadSoon();
     } }, 'Excluir coluna')));
+}
+
+/** Informações pelas quais dá para ordenar uma coluna (também usado nas automações) */
+export function sortChoices() {
+  return [
+    ['due_date', 'Prazo de entrega'], ['created_at', 'Data de entrada'], ['title', 'Título / nº do pedido'], ['updated_at', 'Última alteração'],
+    ...state.fields.filter((f) => !['url', 'email', 'phone'].includes(f.type)).map((f) => [`field:${f.id}`, `Campo: ${f.name}`]),
+  ];
+}
+export const SORT_DIRS = [['asc', 'Crescente (A→Z, 1→9, mais antigo primeiro)'], ['desc', 'Decrescente (Z→A, 9→1, mais recente primeiro)']];
+
+function sortMenu(anchor, col) {
+  const by = h('select', {}, sortChoices().map(([v, l]) => h('option', { value: v }, l)));
+  const dir = h('select', {}, SORT_DIRS.map(([v, l]) => h('option', { value: v }, l)));
+  const pop = popover(anchor, h('div', { class: 'menu sort-menu' },
+    h('div', { class: 'menu-title' }, `Ordenar "${col.name}"`),
+    h('label', { class: 'stack small' }, 'Ordenar por', by),
+    h('label', { class: 'stack small' }, 'Ordem', dir),
+    h('p', { class: 'muted small' }, 'Listas de opções (ex.: Metal, Pedra) seguem a ordem das opções do campo. Cards sem a informação vão para o fim. Para ordenar sozinho sempre que um card entrar, crie uma automação.'),
+    h('button', { class: 'btn primary block', onclick: async () => {
+      pop.close();
+      const r = await attempt(() => post(`/columns/${col.id}/sort`, { by: by.value, dir: dir.value }), 'Coluna ordenada');
+      if (r) loadBoard();
+    } }, 'Ordenar agora')), { width: 300 });
 }
 
 function chooseColumn(message, columns) {
@@ -311,6 +336,7 @@ export function cardElement(card) {
       card.source === 'shopify' ? h('span', { class: 'badge shopify', title: 'Pedido do Shopify' }, icon('bag', 13)) : null,
       card.description ? h('span', { class: 'badge', title: 'Tem descrição' }, icon('text', 13)) : null,
       card.attachment_count ? h('span', { class: 'badge', title: 'Anexos' }, icon('clip', 13), String(card.attachment_count)) : null,
+      card.comment_count ? h('span', { class: 'badge', title: 'Comentários' }, icon('chat', 13), String(card.comment_count)) : null,
       card.members.length ? h('span', { class: 'card-members' }, card.members.map(userById).filter(Boolean).map((u) => avatar(u, 22))) : null)));
 }
 
@@ -320,6 +346,10 @@ export function highlightRing(list) {
 }
 
 function fieldChip(def, value) {
+  if (def.type === 'checklist') {
+    const p = checklistProgress(def, value);
+    return p.total ? h('span', { class: `chip checklist-chip${p.done === p.total ? ' complete' : ''}`, title: `${p.done} de ${p.total} itens marcados` }, icon('checklist', 12), `${p.done}/${p.total}`) : '';
+  }
   if (def.type === 'select') {
     const o = def.options.find((x) => x.id === value);
     return o ? h('span', { class: 'chip', style: { background: o.color, color: textColorFor(o.color) } }, o.label) : '';
