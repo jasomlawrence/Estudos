@@ -769,3 +769,92 @@ body.dragging .topbar { backdrop-filter: none; -webkit-backdrop-filter: none; ba
 }
 .rule-block > .btn.small { align-self: flex-start; }
 .card-alerts.detail { margin-top: 8px; }
+
+/* ---------- Seleção de vários cards ---------- */
+.top-btn.active { background: var(--primary); color: #fff; }
+.card-check {
+  position: absolute; top: 8px; left: 8px; z-index: 2; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center;
+  background: rgba(255, 255, 255, .95); box-shadow: inset 0 0 0 2px #b9b4cc; color: transparent; transition: background .12s, box-shadow .12s;
+}
+body.selecting .card { cursor: pointer; }
+body.selecting .card .card-body { padding-left: 38px; }
+body.selecting .card .card-cover + .card-body { padding-left: 12px; }
+.card.selected { box-shadow: 0 0 0 2.5px var(--primary), var(--shadow-sm); }
+.card.selected .card-check { background: var(--primary); box-shadow: none; color: #fff; }
+.col-select {
+  width: 24px; height: 24px; border-radius: 7px; border: 0; display: grid; place-items: center; cursor: pointer; flex-shrink: 0;
+  background: rgba(255, 255, 255, .9); box-shadow: inset 0 0 0 2px #b9b4cc; color: transparent;
+}
+.col-select.partial { box-shadow: inset 0 0 0 2px var(--primary); color: var(--primary); }
+.col-select.on { background: var(--primary); box-shadow: none; color: #fff; }
+.col-select:disabled { opacity: .4; cursor: default; }
+.select-bar {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 14px;
+  background: var(--ink); color: #fff; padding: 10px 12px 10px 18px; border-radius: 18px; box-shadow: var(--shadow-lg); max-width: calc(100vw - 24px);
+}
+.select-bar .select-count { white-space: nowrap; font-size: 13px; }
+.select-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.select-bar .btn { background: rgba(255, 255, 255, .12); color: #fff; border: 0; }
+.select-bar .btn:hover:not(:disabled) { background: rgba(255, 255, 255, .22); }
+.select-bar .btn.primary { background: var(--primary); }
+.select-bar .btn:disabled { opacity: .45; }
+.select-bar .icon-btn { color: #fff; }
+.menu .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; box-shadow: inset 0 0 0 1px rgba(42, 37, 64, .2); }
+.menu .menu-item .avatar { margin-right: 8px; }
+.segmented.small button { padding: 4px 10px; font-size: 12px; }
+.menu .segmented { margin: 2px 0 6px; }
+body.selecting .board { padding-bottom: 90px; }
+@media (max-width: 760px) {
+  .select-bar { bottom: 10px; flex-direction: column; align-items: stretch; gap: 8px; padding: 10px; width: calc(100vw - 20px); }
+  .select-bar .lbl { display: none; }
+  .select-bar .btn.primary .lbl { display: inline; }
+  .select-actions { justify-content: space-between; }
+}
+
+/* ---------- Etiquetas de impressão ---------- */
+.plabel {
+  background: #fff; color: #000; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 1.2mm 3mm; overflow: hidden;
+  box-sizing: border-box; font-family: Arial, Helvetica, sans-serif; line-height: 1.2; -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.lbl-item { min-width: 0; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: .3em; }
+.lbl-item.full { flex: 0 0 100%; }
+.lbl-item.half { flex: 0 0 calc(50% - 1.5mm); }
+.lbl-item.bold { font-weight: 800; }
+.lbl-name { font-weight: 400; }
+.lbl-item.key-qr, .lbl-item.key-photo, .lbl-item.key-barcode { align-items: flex-start; }
+.lbl-qr svg { display: block; width: 100%; height: 100%; }
+.lbl-photo { display: block; width: 100%; object-fit: contain; filter: grayscale(1) contrast(1.15); }
+.lbl-photo.empty { border: .3mm dashed #888; display: grid; place-items: center; font-size: 9pt; color: #555; }
+.lbl-barcode { display: block; width: 100%; max-width: 100%; }
+.lbl-hr { width: 100%; border: 0; border-top: .4mm solid #000; margin: .4mm 0; }
+.lbl-chip { border: .3mm solid #000; border-radius: 1mm; padding: 0 1mm; margin-right: 1mm; }
+.lbl-desc { white-space: pre-line; }
+.lbl-warn { font-size: 9pt; color: #b00; }
+.print-thumb { background: #fff; box-shadow: var(--shadow-md); border-radius: 4px; flex-shrink: 0; }
+.print-thumb .plabel.overflow { box-shadow: inset 0 -6px 0 #d03b3b; }
+.print-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.print-toolbar .grow { flex: 1; }
+.print-preview { display: flex; flex-wrap: wrap; gap: 18px; padding: 16px; background: var(--surface-2); border-radius: 16px; max-height: 62vh; overflow: auto; align-items: flex-start; }
+.print-help { margin-top: 14px; }
+.print-help code { word-break: break-all; }
+.print-editor-form .form-row { grid-template-columns: 150px minmax(0, 1fr); }
+.print-editor-form input[type=number] { width: 90px !important; }
+.print-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 20px; align-items: start; margin-top: 12px; }
+.print-editor-preview { background: var(--surface-2); border-radius: 16px; padding: 16px; position: sticky; top: 0; }
+.print-items { list-style: none; padding: 0; margin: 6px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+.print-item { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 12px; padding: 8px 10px; background: var(--surface); }
+.print-item .grow { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.print-item-opts { gap: 6px; }
+.print-item-opts select { padding: 3px 6px; font-size: 12px; }
+.drag-handle { cursor: grab; color: var(--muted); padding: 2px 2px; user-select: none; letter-spacing: -2px; }
+@media (max-width: 900px) { .print-editor { grid-template-columns: 1fr; } .print-editor-preview { position: static; } }
+
+#print-root { display: none; }
+@media print {
+  html, body.printing { height: auto !important; overflow: visible !important; background: #fff !important; display: block !important; }
+  body.printing > *:not(#print-root) { display: none !important; }
+  body.printing #print-root { display: block; }
+  .print-page { overflow: hidden; position: relative; break-after: page; page-break-after: always; }
+  .print-page:last-child { break-after: auto; page-break-after: auto; }
+  .print-page.landscape .print-rot { transform-origin: top left; transform: translateX(var(--rot-h)) rotate(90deg); }
+}

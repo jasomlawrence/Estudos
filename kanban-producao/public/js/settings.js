@@ -4,6 +4,7 @@ import { get, post, patch, put, del, attempt, modal, confirmDialog, toast } from
 import { state, isAdmin } from './state.js';
 import { loadBoard } from './board.js';
 import { automationsPanel } from './automations.js';
+import { printSettingsPanel } from './print.js';
 
 const FIELD_TYPES = [
   ['text', 'Texto curto'], ['textarea', 'Texto longo'], ['number', 'Número'], ['currency', 'Valor (R$)'],
@@ -14,7 +15,7 @@ const FIELD_TYPES = [
 export function openSettings(tab = 'board') {
   const m = modal({ title: 'Configurações', wide: true, className: 'settings-modal', onClose: () => loadBoard() });
   const tabs = [
-    ['board', 'Quadro'], ['fields', 'Campos do card'], ['labels', 'Etiquetas'], ['cycle', 'Cronômetro de produção'],
+    ['board', 'Quadro'], ['fields', 'Campos do card'], ['labels', 'Etiquetas'], ['printing', 'Impressão de etiquetas'], ['cycle', 'Cronômetro de produção'],
     ...(isAdmin() ? [['automations', 'Automações'], ['shopify', 'Shopify'], ['correios', 'Correios'], ['sheets', 'Google Planilhas'], ['notifications', 'Notificações'], ['users', 'Usuários']] : []),
     ['account', 'Minha conta'],
   ];
@@ -32,6 +33,7 @@ export function openSettings(tab = 'board') {
 
 const PANELS = {
   automations: automationsPanel,
+  printing: printSettingsPanel,
   // ---------------- Quadro ----------------
   async board(panel) {
     const name = h('input', { value: state.board.name });

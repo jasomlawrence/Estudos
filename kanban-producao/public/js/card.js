@@ -1,6 +1,7 @@
 // Janela de detalhes do card: campos personalizados, anexos/capa, cor, etiquetas, histórico, tempo de produção
 import { h, $, clear, textColorFor, fmtDateTime, fmtDuration, avatar, toLocalInput, colorPicker, PALETTE, copyText, icon } from './util.js';
 import { get, post, patch, del, api, attempt, modal, popover, confirmDialog, toast } from './api.js';
+import { openPrint } from './print.js';
 import { state, canEdit, userById, labelById } from './state.js';
 import { activityItem } from './activity.js';
 import { openLightbox } from './lightbox.js';
@@ -364,6 +365,7 @@ function sidebar(card, editable, col) {
       const r = await attempt(() => post(`/cards/${card.id}/notify`));
       if (r) { toast(`Aviso enviado: ${r.channels.join(', ') || 'nenhum canal ativo'}`, 'ok'); current.card = await get(`/cards/${card.id}`); render(); }
     } }, icon('bell'), 'Enviar aviso de prazo agora') : null,
+    h('button', { class: 'btn block', onclick: () => openPrint([card.id]) }, icon('printer'), 'Imprimir etiqueta'),
     h('button', { class: 'btn block', onclick: () => { copyText(`${location.origin}/#card=${card.id}`); toast('Link copiado', 'ok'); } }, icon('link'), 'Copiar link do card'),
     editable ? h('button', { class: 'btn block', onclick: () => save({ archived: !card.archived }) }, card.archived ? [icon('restore'), 'Restaurar card'] : [icon('archive'), 'Arquivar card']) : null,
     editable ? h('button', { class: 'btn block danger', onclick: async () => {

@@ -3,6 +3,8 @@ import { h, $, $$, clear, textColorFor, fmtShortDate, fmtDuration, avatar, field
 import { get, post, patch, del, attempt, popover, confirmDialog, toast } from './api.js';
 import { state, canEdit, userById, labelById, columnById, markLocalEdit } from './state.js';
 import { openCard } from './card.js';
+import { toggleCard, toggleColumn, columnFullySelected, isSelected } from './selection.js';
+import { openPrint } from './print.js';
 
 /* global Sortable */
 
@@ -109,7 +111,8 @@ export const reloadSoon = (() => {
   return () => { clearTimeout(t); t = setTimeout(() => loadBoard().catch(() => {}), 200); };
 })();
 
-function renderBoard(keepScroll) {
+export function renderBoard(keepScroll) {
+  if (!state.board) return;
   const root = $('#board');
   const scrollLeft = keepScroll ? root.scrollLeft : 0;
   const colScroll = Object.fromEntries($$('.cards', root).map((el) => [el.dataset.columnId, el.scrollTop]));
@@ -125,7 +128,7 @@ function renderBoard(keepScroll) {
 
   root.scrollLeft = scrollLeft;
   for (const el of $$('.cards', root)) el.scrollTop = colScroll[el.dataset.columnId] || 0;
-  if (canEdit()) setupSortables(list);
+  if (canEdit() && !state.selecting) setupSortables(list);
   setupInfiniteScroll(root);
 }
 
@@ -151,6 +154,10 @@ function columnElement(col) {
       }),
       h('span', { class: 'count', title: 'Quantidade de cards' }, String(col.total)),
       cycle,
+      state.selecting ? h('button', {
+        class: `col-select${columnFullySelected(col) ? ' on' : ''}`, title: 'Selecionar todos os cards da coluna', disabled: !col.total,
+        onclick: () => toggleColumn(col),
+      }, icon('check', 14)) : null,
       h('button', { class: 'icon-btn', title: 'Minimizar coluna', onclick: () => toggleCollapse(col) }, icon('collapse', 16)),
       canEdit() ? h('button', { class: 'icon-btn', title: 'Mais opções', onclick: (e) => columnMenu(e.currentTarget, col) }, icon('more', 18)) : null),
     cards,
@@ -180,6 +187,11 @@ function columnMenu(anchor, col) {
     h('hr'),
     h('button', { class: 'menu-item', onclick: () => { pop.close(); toggleCollapse(col); } }, 'Minimizar coluna'),
     h('button', { class: 'menu-item', onclick: () => { pop.close(); $(`.column[data-column-id="${col.id}"] .add-card-btn`)?.click(); } }, 'Adicionar card'),
+    col.total ? h('button', { class: 'menu-item', onclick: async () => {
+      pop.close();
+      const ids = await attempt(() => get(`/columns/${col.id}/card-ids${state.archived ? '?archived=1' : ''}`));
+      if (ids?.length) openPrint(ids);
+    } }, `Imprimir etiquetas da coluna (${col.total})`) : null,
     others.length && col.total ? h('div', { class: 'menu-title' }, 'Mover todos os cards para…') : null,
     col.total ? others.map((o) => h('button', { class: 'menu-item indent', onclick: async () => {
       pop.close();
@@ -278,11 +290,12 @@ export function cardElement(card) {
   const style = card.color ? { background: card.color, color: fg, '--card-fg': fg } : {};
   if (hl.length) style['--hl-ring'] = highlightRing(hl);
   return h('article', {
-    class: `card${card.color ? ' colored' : ''}${hl.length ? ' highlighted' : ''}`, dataset: { cardId: card.id }, tabIndex: 0, style,
+    class: `card${card.color ? ' colored' : ''}${hl.length ? ' highlighted' : ''}${state.selecting && isSelected(card.id) ? ' selected' : ''}`, dataset: { cardId: card.id }, tabIndex: 0, style,
     title: hl.length ? `Automação: ${hl.map((x) => x.name).join(', ')}` : undefined,
-    onclick: () => openCard(card.id),
-    onkeydown: (e) => { if (e.key === 'Enter') openCard(card.id); },
+    onclick: () => (state.selecting ? toggleCard(card) : openCard(card.id)),
+    onkeydown: (e) => { if (e.key === 'Enter') (state.selecting ? toggleCard(card) : openCard(card.id)); },
   },
+  state.selecting ? h('span', { class: 'card-check', 'aria-hidden': 'true' }, icon('check', 14)) : null,
   card.cover ? h('img', { class: 'card-cover', src: card.cover, alt: '', loading: 'lazy', decoding: 'async', draggable: false }) : null,
   h('div', { class: 'card-body' },
     hl.some((x) => x.text) ? h('div', { class: 'card-alerts' }, hl.filter((x) => x.text).map((x) => h('span', { class: 'card-alert', style: { '--hl': x.color } }, x.text))) : null,
