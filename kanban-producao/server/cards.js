@@ -5,7 +5,7 @@ const { bus, boardChanged } = require('./events');
 const { computeCycle, columnDurations } = require('./cycle');
 const rules = require('./rules');
 
-const FIELD_TYPES = ['text', 'textarea', 'number', 'currency', 'date', 'datetime', 'checkbox', 'select', 'multiselect', 'url', 'email', 'phone'];
+const FIELD_TYPES = ['text', 'textarea', 'number', 'currency', 'date', 'datetime', 'checkbox', 'select', 'multiselect', 'checklist', 'url', 'email', 'phone'];
 
 function logActivity(boardId, cardId, userId, action, details = {}) {
   q.run('INSERT INTO activity (board_id, card_id, user_id, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -46,8 +46,24 @@ function normalizeValue(def, value) {
       const ids = arr.map((v) => def.options.find((o) => o.id === v || o.label === v)?.id).filter(Boolean);
       return ids.length ? [...new Set(ids)] : null;
     }
+    case 'checklist': {
+      // { done: [ids marcados], extra: [{ id, label }] } — itens do modelo (opções do campo) + itens só deste card
+      const v = typeof value === 'string' ? parseJSON(value, null) : value;
+      if (!v || typeof v !== 'object') return null;
+      const extra = (Array.isArray(v.extra) ? v.extra : []).filter((x) => x && String(x.label || '').trim()).slice(0, 50)
+        .map((x) => ({ id: String(x.id || Math.random().toString(36).slice(2, 10)).slice(0, 24), label: String(x.label).trim().slice(0, 200) }));
+      const valid = new Set([...def.options.map((o) => o.id), ...extra.map((x) => x.id)]);
+      const done = [...new Set((Array.isArray(v.done) ? v.done : []).map(String))].filter((id) => valid.has(id));
+      return done.length || extra.length ? { done, extra } : null;
+    }
     default: return String(value);
   }
+}
+
+/** Progresso de um campo checklist: quantos itens marcados de quantos */
+function checklistProgress(def, value) {
+  const total = def.options.length + (value?.extra?.length || 0);
+  return { done: Math.min(value?.done?.length || 0, total), total };
 }
 
 /** Texto legível do valor (usado no histórico e na planilha). */
@@ -61,6 +77,7 @@ function displayValue(def, value) {
     case 'datetime': return new Date(value).toLocaleString('pt-BR', { timeZone: process.env.TZ || 'America/Sao_Paulo' });
     case 'select': return def.options.find((o) => o.id === value)?.label ?? '';
     case 'multiselect': return value.map((id) => def.options.find((o) => o.id === id)?.label).filter(Boolean).join(', ');
+    case 'checklist': { const p = checklistProgress(def, value); return p.total ? `${p.done}/${p.total} itens marcados` : ''; }
     default: return String(value);
   }
 }
@@ -228,6 +245,48 @@ const updateCard = transaction((cardId, patch, userId) => {
   afterChange(card.board_id, card.id, userId, events);
 });
 
+// ---------------- Ordenar os cards de uma coluna ----------------
+const SORT_LABELS = { due_date: 'prazo de entrega', created_at: 'data de entrada', updated_at: 'última alteração', title: 'título / nº do pedido' };
+
+/** Valor usado para ordenar (null = vai para o fim) */
+function sortValue(card, by, def, values) {
+  if (!def) return card[by] || null;
+  const v = values.get(card.id);
+  if (v === undefined || v === null) return null;
+  switch (def.type) {
+    case 'number': case 'currency': return Number(v);
+    case 'checkbox': return v ? 1 : 0;
+    case 'select': { const i = def.options.findIndex((o) => o.id === v); return i < 0 ? null : i; } // ordem das opções do campo
+    case 'multiselect': { const i = Math.min(...v.map((id) => def.options.findIndex((o) => o.id === id)).filter((n) => n >= 0)); return Number.isFinite(i) ? i : null; }
+    case 'checklist': { const p = checklistProgress(def, v); return p.total ? p.done / p.total : null; }
+    default: return displayValue(def, v) || null;
+  }
+}
+
+const sortColumn = transaction((columnId, { by = 'due_date', dir = 'asc' } = {}, userId = null) => {
+  const column = q.get('SELECT * FROM columns WHERE id = ?', columnId);
+  if (!column) throw httpError(404, 'Coluna não encontrada.');
+  const m = /^field:(\d+)$/.exec(by);
+  const def = m ? fieldDefs(column.board_id).find((f) => f.id === Number(m[1])) : null;
+  if (!def && !SORT_LABELS[by]) throw httpError(400, 'Escolha por qual informação ordenar.');
+  const rows = q.all('SELECT * FROM cards WHERE column_id = ? AND archived = 0 ORDER BY position', column.id);
+  const values = new Map(def ? q.all('SELECT card_id, value FROM card_field_values WHERE field_id = ?', def.id).map((v) => [v.card_id, parseJSON(v.value, null)]) : []);
+  const sign = dir === 'desc' ? -1 : 1;
+  const keyed = rows.map((card, i) => ({ card, i, key: sortValue(card, by, def, values) }));
+  keyed.sort((a, b) => {
+    if (a.key === null || b.key === null) return (a.key === null) - (b.key === null) || a.i - b.i; // vazios sempre no fim
+    const c = typeof a.key === 'number' && typeof b.key === 'number' ? a.key - b.key
+      : String(a.key).localeCompare(String(b.key), 'pt-BR', { numeric: true, sensitivity: 'base' });
+    return c * sign || a.i - b.i;
+  });
+  // Arquivados ficam depois dos ativos, na mesma ordem de antes
+  const archived = q.all('SELECT id FROM cards WHERE column_id = ? AND archived = 1 ORDER BY position', column.id);
+  [...keyed.map((k) => k.card.id), ...archived.map((a) => a.id)].forEach((id, i) => q.run('UPDATE cards SET position = ? WHERE id = ?', (i + 1) * 1024, id));
+  logActivity(column.board_id, null, userId, 'column.sorted', { name: column.name, by: def ? def.name : SORT_LABELS[by], dir });
+  setImmediate(() => boardChanged(column.board_id, userId));
+  return rows.length;
+});
+
 function deleteCard(cardId, userId) {
   const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
   if (!card) throw httpError(404, 'Card não encontrado.');
@@ -266,6 +325,7 @@ function serializeCards(rows) {
   const members = q.all(`SELECT card_id, user_id FROM card_members WHERE card_id IN (${marks})`, ...ids);
   const values = q.all(`SELECT card_id, field_id, value FROM card_field_values WHERE card_id IN (${marks})`, ...ids);
   const atts = q.all(`SELECT card_id, COUNT(*) AS n FROM attachments WHERE card_id IN (${marks}) GROUP BY card_id`, ...ids);
+  const comments = q.all(`SELECT card_id, COUNT(*) AS n FROM comments WHERE card_id IN (${marks}) GROUP BY card_id`, ...ids);
   const covers = q.all(`SELECT a.id, a.filename, a.card_id FROM attachments a JOIN cards c ON c.cover_attachment_id = a.id WHERE c.id IN (${marks})`, ...ids);
   // Regras de destaque visual ("sempre"), por quadro
   const visual = {};
@@ -304,6 +364,7 @@ function serializeCards(rows) {
     members: members.filter((m) => m.card_id === r.id).map((m) => m.user_id),
     fields: Object.fromEntries(values.filter((v) => v.card_id === r.id).map((v) => [v.field_id, parseJSON(v.value, null)])),
     attachment_count: atts.find((a) => a.card_id === r.id)?.n || 0,
+    comment_count: comments.find((c) => c.card_id === r.id)?.n || 0,
   }));
 }
 
@@ -337,5 +398,5 @@ function httpError(status, message) {
 
 module.exports = {
   FIELD_TYPES, fieldDefs, normalizeValue, displayValue, logActivity, createCard, moveCard, updateCard, deleteCard,
-  serializeCards, cardDetail, httpError, boardColumns, applyCycle, parseJSON, loadRules,
+  serializeCards, cardDetail, httpError, boardColumns, applyCycle, parseJSON, loadRules, sortColumn, checklistProgress, SORT_LABELS,
 };

@@ -2,8 +2,9 @@
 import { h, $, clear, avatar, timeAgo, debounce, icon } from './util.js';
 import { get, post, patch, attempt, popover, toast } from './api.js';
 import { state, isAdmin, isOwnEcho } from './state.js';
-import { loadBoard, reloadSoon, enableDragScroll } from './board.js';
-import { openCard, refreshOpenCard } from './card.js';
+import { loadBoard, reloadSoon, enableDragScroll, boardLoadedHooks } from './board.js';
+import { openCard, refreshOpenCard, openCommentsPanel } from './card.js';
+import { openChat, onCommentEvent, setChatBadge } from './comments.js';
 import { openSettings } from './settings.js';
 import { openMetrics } from './metrics.js';
 import { openActivity } from './activity.js';
@@ -46,6 +47,7 @@ async function startApp() {
   const saved = Number(localStorage.getItem('boardId'));
   state.boardId = state.boards.some((b) => b.id === saved) ? saved : state.boards[0]?.id;
   renderShell();
+  boardLoadedHooks.push(() => setChatBadge(state.chatUnread || 0));
   await loadBoard({ keepScroll: false });
   connectEvents();
   refreshNotifications();
@@ -101,6 +103,7 @@ function renderShell() {
     h('button', { dataset: { view: 'board' }, title: 'Quadro', onclick: () => setView('board') }, icon('kanban', 16), h('span', { class: 'lbl' }, 'Quadro')),
     h('button', { dataset: { view: 'calendar' }, title: 'Calendário', onclick: () => setView('calendar') }, icon('calendar', 16), h('span', { class: 'lbl' }, 'Calendário')),
     h('button', { dataset: { view: 'dashboard' }, title: 'Painel de produção', onclick: () => setView('dashboard') }, icon('gauge', 16), h('span', { class: 'lbl' }, 'Painel')));
+  const chatBtn = h('button', { class: 'top-btn bell', title: 'Conversa da equipe', onclick: () => openChat() }, icon('chat', 17), h('span', { class: 'badge-count', id: 'chat-count', hidden: true }));
   const bell = h('button', { class: 'top-btn bell', title: 'Notificações', onclick: (e) => openNotifications(e.currentTarget) }, icon('bell', 17), h('span', { class: 'badge-count', id: 'notif-count', hidden: true }));
   const userBtn = h('button', { class: 'top-btn user', onclick: (e) => {
     const pop = popover(e.currentTarget, h('div', { class: 'menu' },
@@ -124,7 +127,7 @@ function renderShell() {
         topBtn('history', 'Atividade', 'Histórico de alterações', () => openActivity(openCard)),
         archivedBtn,
         topBtn('settings', 'Configurações', 'Configurações', () => openSettings()),
-        bell, userBtn)),
+        chatBtn, bell, userBtn)),
     h('main', { id: 'board', class: 'board' }),
     h('main', { id: 'calendar', class: 'calendar', hidden: true }),
     h('main', { id: 'dashboard', class: 'dashboard', hidden: true }));
@@ -149,9 +152,15 @@ function connectEvents() {
     toast(n.message, 'warn');
     refreshNotifications();
     if ('Notification' in window && Notification.permission === 'granted') {
-      const notif = new Notification(n.title || 'Aviso', { body: n.message, tag: `card-${n.card_id}` });
-      notif.onclick = () => { window.focus(); if (n.card_id) openCard(n.card_id); };
+      const notif = new Notification(n.title || 'Aviso', { body: n.message, tag: n.card_id ? `card-${n.card_id}` : `chat-${n.id}` });
+      notif.onclick = () => { window.focus(); if (n.card_id) openCard(n.card_id); else if (n.chat) openChat(); };
     }
+  });
+  // Comentários e conversa da equipe em tempo real
+  es.addEventListener('comment', (e) => {
+    const data = JSON.parse(e.data);
+    onCommentEvent(data, openCommentsPanel());
+    if (data.cardId && data.userId !== state.user.id) reloadSoon(); // contador de comentários no card
   });
 }
 
@@ -170,7 +179,7 @@ async function openNotifications(anchor) {
     h('div', { class: 'menu-title' }, 'Notificações'),
     'Notification' in window && Notification.permission === 'default'
       ? h('button', { class: 'btn small block', onclick: () => Notification.requestPermission() }, 'Ativar notificações do navegador') : null,
-    r?.items.length ? r.items.map((n) => h('button', { class: `notif${n.read ? '' : ' unread'}`, onclick: () => { pop.close(); if (n.card_id) openCard(n.card_id); } },
+    r?.items.length ? r.items.map((n) => h('button', { class: `notif${n.read ? '' : ' unread'}`, onclick: () => { pop.close(); if (n.card_id) openCard(n.card_id); else if (n.message.startsWith('💬')) openChat(); } },
       h('div', {}, n.message.split('\n')[0]), h('small', { class: 'muted' }, timeAgo(n.created_at)))) : h('p', { class: 'muted' }, 'Nenhuma notificação.')), { width: 360 });
   if (r?.unread) { await post('/notifications/read'); refreshNotifications(); }
 }

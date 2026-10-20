@@ -14,6 +14,7 @@ const notifications = require('./notifications');
 const correios = require('./correios');
 const automations = require('./automations');
 const print = require('./print');
+const comments = require('./comments');
 const { cycleMs, stats, columnDurations, resolveCycleColumns } = require('./cycle');
 
 const router = express.Router();
@@ -170,6 +171,7 @@ router.get('/boards/:id', (req, res) => {
     fields: cards.fieldDefs(board.id),
     users: q.all('SELECT * FROM users WHERE active = 1 ORDER BY name').map(auth.publicUser),
     correios_enabled: !!correios.getConfig().enabled,
+    chat_unread: comments.chatUnread(req.user.id, board.id),
   });
 });
 
@@ -385,6 +387,14 @@ router.patch('/fields/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Nova ordem dos campos (arrastando na tela de configurações)
+router.put('/boards/:id/fields-order', (req, res) => {
+  const board = boardOr404(req.params.id);
+  (Array.isArray(req.body.ids) ? req.body.ids : []).forEach((id, i) => q.run('UPDATE field_defs SET position = ? WHERE id = ? AND board_id = ?', (i + 1) * 1024, Number(id), board.id));
+  events.boardChanged(board.id, req.user.id);
+  res.json({ ok: true });
+});
+
 router.delete('/fields/:id', (req, res) => {
   const f = q.get('SELECT * FROM field_defs WHERE id = ?', req.params.id);
   if (!f) throw httpError(404, 'Campo não encontrado.');
@@ -414,6 +424,39 @@ router.post('/cards/:id/move', (req, res) => {
   // Devolve o card atualizado para a tela trocar só ele, sem redesenhar o quadro inteiro
   res.json(cards.serializeCards([q.get('SELECT * FROM cards WHERE id = ?', Number(req.params.id))])[0]);
 });
+
+// ---------------- Ordenar cards da coluna ----------------
+router.post('/columns/:id/sort', (req, res) => {
+  const n = cards.sortColumn(Number(req.params.id), { by: String(req.body.by || 'due_date'), dir: req.body.dir === 'desc' ? 'desc' : 'asc' }, req.user.id);
+  res.json({ sorted: n });
+});
+
+// ---------------- Comentários e conversa ----------------
+router.get('/cards/:id/comments', (req, res) => {
+  const card = q.get('SELECT * FROM cards WHERE id = ?', req.params.id);
+  if (!card) throw httpError(404, 'Card não encontrado.');
+  res.json(comments.listComments({ boardId: card.board_id, cardId: card.id, limit: 500 }));
+});
+router.post('/cards/:id/comments', (req, res) => {
+  const card = q.get('SELECT * FROM cards WHERE id = ?', req.params.id);
+  if (!card) throw httpError(404, 'Card não encontrado.');
+  res.json(comments.addComment({ boardId: card.board_id, cardId: card.id, user: req.user, body: req.body.body, mentions: req.body.mentions || [] }));
+});
+router.get('/boards/:id/chat', (req, res) => {
+  const board = boardOr404(req.params.id);
+  res.json(comments.listComments({ boardId: board.id, before: Number(req.query.before) || null, limit: 50 }));
+});
+router.post('/boards/:id/chat', (req, res) => {
+  const board = boardOr404(req.params.id);
+  res.json(comments.addComment({ boardId: board.id, user: req.user, body: req.body.body, mentions: req.body.mentions || [] }));
+});
+router.post('/boards/:id/chat/read', (req, res) => {
+  const board = boardOr404(req.params.id);
+  comments.markChatRead(req.user.id, board.id);
+  res.json({ ok: true });
+});
+router.patch('/comments/:id', (req, res) => res.json(comments.editComment(Number(req.params.id), req.user, req.body.body)));
+router.delete('/comments/:id', (req, res) => { comments.deleteComment(Number(req.params.id), req.user); res.json({ ok: true }); });
 
 // ---------------- Seleção de vários cards ----------------
 const MAX_BULK = 500;

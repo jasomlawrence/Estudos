@@ -10,7 +10,7 @@ const notifications = require('./notifications');
 const rules = require('./rules');
 
 const TRIGGERS = ['always', 'match', 'created', 'moved', 'label_added', 'field_changed'];
-const ACTIONS = ['highlight', 'notify', 'webhook', 'add_label', 'remove_label', 'add_member', 'set_color', 'move'];
+const ACTIONS = ['highlight', 'notify', 'webhook', 'add_label', 'remove_label', 'add_member', 'set_color', 'move', 'sort'];
 const CONDITIONS = ['due_within', 'overdue', 'no_due', 'done', 'not_done', 'has_label', 'not_label', 'in_column', 'not_in_column', 'no_members', 'source', 'field'];
 
 const ids = (list) => (Array.isArray(list) ? list.map(Number).filter(Number.isInteger) : []);
@@ -48,6 +48,7 @@ function sanitize(input) {
         case 'add_member': return { type: a.type, user: Number(a.user) };
         case 'set_color': return { type: a.type, color: color(a.color) };
         case 'move': return { type: a.type, column: Number(a.column) };
+        case 'sort': return { type: a.type, by: /^(due_date|created_at|updated_at|title|field:\d+)$/.test(a.by || '') ? a.by : 'due_date', dir: a.dir === 'desc' ? 'desc' : 'asc' };
         default: return null;
       }
     }).filter(Boolean);
@@ -146,6 +147,10 @@ async function runRule(rule, cardId, evt = null) {
         case 'move':
           if (card.column_id !== action.column) asAutomation(() => cards.moveCard(card.id, { columnId: action.column }, null));
           done.push('moveu o card');
+          break;
+        case 'sort':
+          cards.sortColumn(card.column_id, { by: action.by, dir: action.dir }, null);
+          done.push('ordenou a coluna');
           break;
         default: break;
       }

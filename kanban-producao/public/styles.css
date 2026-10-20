@@ -873,3 +873,65 @@ body.selecting .board { padding-bottom: 90px; }
 .log-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .log-table td:nth-child(4) { width: 55%; }
 .log-table .chip { white-space: nowrap; }
+
+/* ---------- Checklist ---------- */
+.checklist { display: flex; flex-direction: column; gap: 6px; }
+.checklist ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.checklist li { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 8px; }
+.checklist li:hover { background: var(--surface-2); }
+.checklist li .check { flex: 1; font-weight: 500; }
+.checklist li.done .check { color: var(--muted); text-decoration: line-through; }
+.checklist input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--primary); }
+.checklist-progress { display: flex; align-items: center; gap: 8px; }
+.checklist-progress .bar { flex: 1; height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.checklist-progress .bar span { display: block; height: 100%; border-radius: 999px; background: var(--primary); transition: width .2s; }
+.checklist-progress.complete .bar span { background: var(--ok); }
+.field.field-checklist { grid-column: 1 / -1; }
+.checklist-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); }
+.checklist-chip.complete { background: var(--ok-soft); color: var(--ok); }
+.checklist-options .check-mark { width: 24px; text-align: center; color: var(--muted); }
+.lbl-check { list-style: none; margin: 0; padding: 0; width: 100%; }
+.lbl-block { flex: 0 0 100%; }
+.field-def .drag-handle { font-size: 16px; padding: 4px; }
+
+/* ---------- Ordenar coluna ---------- */
+.sort-menu .stack { margin: 6px 0; }
+.sort-menu select { width: 100%; }
+
+/* ---------- Comentários e conversa ---------- */
+.mention-box { position: relative; border: 1.5px solid var(--border); border-radius: 14px; background: var(--surface); padding: 6px 8px; }
+.mention-box:focus-within { border-color: var(--primary); }
+.mention-input { width: 100%; border: 0 !important; resize: none; outline: none; padding: 4px 2px; background: transparent; box-shadow: none !important; min-height: 38px; }
+.mention-actions { display: flex; align-items: center; gap: 8px; }
+.mention-actions small { flex: 1; font-size: 11px; }
+.mention-actions .icon-btn { font-weight: 800; color: var(--primary); }
+.mention-list {
+  position: absolute; left: 8px; bottom: calc(100% + 4px); z-index: 30; background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-lg);
+  padding: 4px; min-width: 220px; max-height: 260px; overflow: auto;
+}
+.mention-option { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; padding: 6px 8px; border-radius: 8px; cursor: pointer; text-align: left; }
+.mention-option.active, .mention-option:hover { background: var(--primary-soft); }
+.comments { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-direction: column; gap: 12px; }
+.comment { display: flex; gap: 10px; }
+.comment-main { flex: 1; min-width: 0; background: var(--surface-2); border-radius: 4px 14px 14px 14px; padding: 8px 12px; }
+.comment.mentions-me .comment-main { background: var(--primary-soft); box-shadow: inset 3px 0 0 var(--primary); }
+.comment-head { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.comment-head time { font-size: 12px; color: var(--muted); }
+.comment-head .grow { flex: 1; }
+.comment-body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; line-height: 1.45; }
+.mention { color: var(--primary); font-weight: 700; background: var(--primary-soft); border-radius: 6px; padding: 0 3px; }
+.mention.me { background: var(--primary); color: #fff; }
+.link-btn { border: 0; background: none; padding: 0; color: var(--muted); cursor: pointer; font-size: 12px; }
+.link-btn:hover { color: var(--primary); text-decoration: underline; }
+.comments .empty { padding: 6px 0; }
+.chat-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100vw); z-index: 70; background: var(--surface); box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; animation: chat-in .18s ease-out;
+}
+@keyframes chat-in { from { transform: translateX(30px); opacity: 0; } }
+.chat-panel header { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.chat-panel header .grow { flex: 1; }
+.chat-scroll { flex: 1; overflow: auto; padding: 12px 16px; }
+.chat-more { display: block; margin: 0 auto 8px; }
+.chat-panel footer { padding: 10px 12px 14px; border-top: 1px solid var(--border); }
+.chat-list { margin: 0; }

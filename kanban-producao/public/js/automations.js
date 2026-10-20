@@ -2,6 +2,7 @@
 import { h, clear, PALETTE, icon } from './util.js';
 import { get, post, put, del, attempt, confirmDialog, toast } from './api.js';
 import { state } from './state.js';
+import { sortChoices, SORT_DIRS } from './board.js';
 
 const TRIGGERS = [
   ['always', 'Sempre que o card atender às condições (destaque visual)'],
@@ -19,7 +20,7 @@ const CONDITIONS = [
 const ACTIONS = [
   ['notify', 'Avisar pessoas (sininho, navegador e e-mail)'], ['webhook', 'Enviar para webhook (WhatsApp via Zapier/Make, Slack…)'],
   ['add_label', 'Adicionar etiqueta'], ['remove_label', 'Remover etiqueta'], ['add_member', 'Adicionar responsável'],
-  ['set_color', 'Mudar a cor do card'], ['move', 'Mover para a coluna'],
+  ['set_color', 'Mudar a cor do card'], ['move', 'Mover para a coluna'], ['sort', 'Ordenar a coluna do card'],
 ];
 const OPS = {
   text: [['contains', 'contém'], ['equals', 'é igual a'], ['not_equals', 'é diferente de']],
@@ -28,8 +29,10 @@ const OPS = {
   select: [['equals', 'é'], ['not_equals', 'não é']],
   checkbox: [['equals', 'é']],
 };
-const opsFor = (def) => [...(OPS[{ textarea: 'text', url: 'text', email: 'text', phone: 'text', currency: 'number', datetime: 'date', multiselect: 'select' }[def?.type] || def?.type] || OPS.text),
-  ['filled', 'está preenchido'], ['empty', 'está vazio']];
+const CHECKLIST_OPS = [['complete', 'está todo marcado'], ['incomplete', 'tem itens sem marcar'], ['filled', 'tem algum item marcado'], ['empty', 'não tem nada marcado']];
+const noValueOps = new Set(['filled', 'empty', 'complete', 'incomplete']);
+const opsFor = (def) => (def?.type === 'checklist' ? CHECKLIST_OPS : [...(OPS[{ textarea: 'text', url: 'text', email: 'text', phone: 'text', currency: 'number', datetime: 'date', multiselect: 'select' }[def?.type] || def?.type] || OPS.text),
+  ['filled', 'está preenchido'], ['empty', 'está vazio']]);
 // Cores fortes para a borda (as pastéis do quadro somem no fundo claro)
 const RING_COLORS = ['#ff4d6d', '#ff8a3d', '#f5b700', '#22c55e', '#14b8a6', '#3b82f6', '#8b5cf6', '#ec4899', '#475569'];
 
@@ -55,7 +58,7 @@ function summary(rule) {
     if (c.type === 'field') {
       const def = state.fields.find((f) => f.id === c.field);
       const op = opsFor(def).find(([k]) => k === c.op)?.[1] || c.op;
-      const value = ['filled', 'empty'].includes(c.op) ? '' : ` "${def?.options?.find((o) => o.id === c.value)?.label ?? (c.value === true || c.value === 'true' ? 'Sim' : c.value === 'false' ? 'Não' : c.value)}"`;
+      const value = noValueOps.has(c.op) ? '' : ` "${def?.options?.find((o) => o.id === c.value)?.label ?? (c.value === true || c.value === 'true' ? 'Sim' : c.value === 'false' ? 'Não' : c.value)}"`;
       return `"${def?.name || '?'}" ${op}${value}`;
     }
     return label.toLowerCase();
@@ -69,6 +72,7 @@ function summary(rule) {
     add_member: `responsável ${name(state.users, a.user)}`,
     set_color: 'mudar cor',
     move: `mover para ${name(state.columns, a.column)}`,
+    sort: `ordenar a coluna por ${(sortChoices().find(([v]) => v === a.by)?.[1] || 'prazo').replace('Campo: ', '').toLowerCase()}`,
   })[a.type]);
   return h('span', {}, h('b', {}, when), cond.length ? ` · se ${cond.join(' e ')}` : '', ' → ', then.join(', ') || 'nada');
 }
@@ -121,7 +125,7 @@ function conditionRow(c, onremove, redraw) {
     params.push(
       sel(state.fields.map((f) => [f.id, f.name]), c.field, (v) => { c.field = Number(v); c.value = ''; redraw(); }),
       sel(opsFor(def), c.op, (v) => { c.op = v; redraw(); }),
-      ['filled', 'empty'].includes(c.op) ? null : fieldValueInput(def, c.value, (v) => { c.value = v; }));
+      noValueOps.has(c.op) ? null : fieldValueInput(def, c.value, (v) => { c.value = v; }));
   }
   return h('div', { class: 'rule-line' },
     sel(CONDITIONS, c.type, (v) => { for (const k of Object.keys(c)) delete c[k]; c.type = v; redraw(); }),
@@ -152,6 +156,10 @@ function actionRow(a, visual, onremove, redraw) {
   }
   if (a.type === 'add_label' || a.type === 'remove_label') { a.label ??= state.labels[0]?.id; params.push(sel(state.labels.map((l) => [l.id, l.name || l.color]), a.label, (v) => { a.label = Number(v); })); }
   if (a.type === 'add_member') { a.user ??= state.users[0]?.id; params.push(sel(state.users.map((u) => [u.id, u.name]), a.user, (v) => { a.user = Number(v); })); }
+  if (a.type === 'sort') {
+    a.by ??= 'due_date'; a.dir ??= 'asc';
+    params.push(sel(sortChoices(), a.by, (v) => { a.by = v; }), sel(SORT_DIRS, a.dir, (v) => { a.dir = v; }));
+  }
   if (a.type === 'move') { a.column ??= state.columns[0]?.id; params.push(sel(state.columns.map((c) => [c.id, c.name]), a.column, (v) => { a.column = Number(v); })); }
   if (a.type === 'set_color') {
     a.color ??= PALETTE[0];
@@ -208,6 +216,11 @@ const TEMPLATES = [
   ['Borda vermelha: prazo vencido', () => ({ name: 'Atrasado', trigger: { type: 'always' }, conditions: [{ type: 'overdue' }], actions: [{ type: 'highlight', color: '#ff4d6d', text: 'Atrasado' }] })],
   ['Borda com etiqueta "Urgente"', () => ({ name: 'Urgente', trigger: { type: 'always' }, conditions: [{ type: 'has_label', label: label('urgente') ?? state.labels[0]?.id }], actions: [{ type: 'highlight', color: '#8b5cf6' }] })],
   ['Avisar ao mover para uma coluna', () => ({ name: 'Card chegou na etapa', trigger: { type: 'moved', columns: [state.columns[2]?.id].filter(Boolean) }, conditions: [], actions: [{ type: 'notify', to: 'users', users: [], message: '{titulo} chegou em {coluna}' }] })],
+  ['Ordenar a coluna quando um card entrar', () => ({ name: 'Manter coluna ordenada por prazo', trigger: { type: 'moved', columns: [state.columns[0]?.id].filter(Boolean) }, conditions: [], actions: [{ type: 'sort', by: 'due_date', dir: 'asc' }] })],
+  ['Checklist completo → mover', () => {
+    const f = state.fields.find((x) => x.type === 'checklist');
+    return { name: 'Checklist completo', trigger: { type: 'field_changed', field: f?.id || null }, conditions: f ? [{ type: 'field', field: f.id, op: 'complete' }] : [], actions: [{ type: 'move', column: state.columns.at(-1)?.id }] };
+  }],
   ['Avisar responsáveis: vence em 2 dias', () => ({ name: 'Vence em 2 dias', trigger: { type: 'match' }, conditions: [{ type: 'due_within', days: 2 }], actions: [{ type: 'notify', to: 'members', message: '⏰ {titulo} vence em {prazo} e está em {coluna}' }] })],
 ];
 

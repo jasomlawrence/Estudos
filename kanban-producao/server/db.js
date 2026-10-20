@@ -184,6 +184,19 @@ CREATE TABLE IF NOT EXISTS shopify_log (
   cards INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  card_id INTEGER REFERENCES cards(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  body TEXT NOT NULL,
+  mentions TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  edited_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_comments_card ON comments(card_id, id);
+CREATE INDEX IF NOT EXISTS idx_comments_board ON comments(board_id, card_id, id);
+
 CREATE TABLE IF NOT EXISTS notification_log (
   dedupe_key TEXT PRIMARY KEY,
   sent_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))

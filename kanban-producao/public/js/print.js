@@ -1,6 +1,6 @@
 // Etiquetas de impressão (Zebra ZD220 e outras térmicas): modelo, prévia e impressão pelo navegador
 import qrcode from '/vendor/qrcode/qrcode.mjs';
-import { h, clear, fieldText, icon } from './util.js';
+import { h, clear, fieldText, icon, checklistItems } from './util.js';
 import { get, put, post, attempt, modal, toast, confirmDialog } from './api.js';
 import { state, columnById, labelById, userById, canEdit } from './state.js';
 
@@ -73,6 +73,12 @@ const contentSize = (t) => (t.orientation === 'landscape' ? [t.height_mm, t.widt
 function itemContent(item, card) {
   const named = (name, value) => [item.show_name ? h('span', { class: 'lbl-name' }, `${name}: `) : null, value];
   const f = fieldOf(item.key);
+  if (f?.type === 'checklist') {
+    // Lista de verificação impressa com quadradinhos (para conferir à mão na bancada)
+    const items = checklistItems(f, card.fields[f.id]);
+    return [item.show_name ? h('span', { class: 'lbl-name lbl-block' }, `${f.name}:`) : null,
+      h('ul', { class: 'lbl-check' }, items.map((it) => h('li', {}, `${it.done ? '☑' : '☐'} ${it.label}`)))];
+  }
   if (f) {
     const v = card.fields[f.id];
     const text = fieldText(f, v) || '—';
@@ -338,7 +344,7 @@ export async function printSettingsPanel(panel) {
 
     if (editable) {
       Sortable.create(list, {
-        handle: '.drag-handle', animation: 150,
+        handle: '.drag-handle', animation: 150, forceFallback: true, fallbackOnBody: true,
         onEnd: (evt) => { const [moved] = current.items.splice(evt.oldIndex, 1); current.items.splice(evt.newIndex, 0, moved); draw(); },
       });
     }
