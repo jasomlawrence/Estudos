@@ -809,9 +809,22 @@ router.post('/integrations/shopify/import', auth.requireAdmin, external(async (r
   const config = shopify.getConfig();
   const orders = await shopify.fetchRecentOrders(config, Number(req.body.days) || 30);
   let created = 0;
-  for (const order of orders) created += await shopify.importOrder(order, config, req.user.id);
+  for (const order of orders) created += await shopify.importOrder(order, config, req.user.id, { source: 'import' });
   res.json({ orders: orders.length, created });
 }));
+
+// Importa um pedido pelo número (ex.: um que não entrou sozinho). force = ignora o filtro de produtos
+router.post('/integrations/shopify/import-order', auth.requireAdmin, external(async (req, res) => {
+  const config = shopify.getConfig();
+  const order = await shopify.fetchOrderByName(config, req.body.name);
+  const created = await shopify.importOrder(order, config, req.user.id, { source: 'manual', force: !!req.body.force });
+  res.json({ order: order.name, created, log: shopify.recentLog(1)[0] });
+}));
+
+// Últimos pedidos recebidos e o que aconteceu com cada um
+router.get('/integrations/shopify/log', auth.requireAdmin, (req, res) => {
+  res.json(shopify.recentLog(Math.min(Number(req.query.limit) || 30, 300)));
+});
 
 router.post('/integrations/shopify/register-webhook', auth.requireAdmin, external(async (req, res) => {
   const base = String(req.body.public_url || getSetting('app', {}).public_url || '').replace(/\/$/, '');
@@ -846,8 +859,19 @@ router.post('/integrations/shopify/refresh-links', auth.requireAdmin, external(a
 }));
 
 router.post('/integrations/shopify/test', auth.requireAdmin, external(async (req, res) => {
-  const data = await shopify.graphql(shopify.getConfig(), '{ shop { name myshopifyDomain } }');
-  res.json(data.shop);
+  const config = shopify.getConfig();
+  const data = await shopify.graphql(config, '{ shop { name myshopifyDomain } }');
+  // Confere se o aviso de pedido novo (webhook) está registrado apontando para este sistema
+  let webhook = null;
+  try {
+    const hooks = await shopify.listWebhooks(config);
+    const orders = hooks.filter((w) => w.topic === 'ORDERS_CREATE');
+    const here = orders.find((w) => /\/webhooks\/shopify\/orders$/.test(w.uri) && w.uri.includes(req.get('host')));
+    webhook = { ok: !!here, uri: here?.uri || orders[0]?.uri || null, count: orders.length };
+  } catch (err) {
+    webhook = { ok: null, error: err.message };
+  }
+  res.json({ ...data.shop, enabled: !!config.enabled, webhook });
 }));
 
 router.get('/integrations/correios', auth.requireAdmin, (req, res) => {

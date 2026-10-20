@@ -867,3 +867,9 @@ body.selecting .board { padding-bottom: 90px; }
   .print-page:last-child { break-after: auto; page-break-after: auto; }
   .print-page.landscape .print-rot { transform-origin: top left; transform: translateX(var(--rot-h)) rotate(90deg); }
 }
+
+.log-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+.log-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.log-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.log-table td:nth-child(4) { width: 55%; }
+.log-table .chip { white-space: nowrap; }

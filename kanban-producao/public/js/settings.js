@@ -213,7 +213,15 @@ const PANELS = {
           c.oauth_connected ? h('button', { class: 'btn subtle', onclick: async () => {
             if (await attempt(() => post('/integrations/shopify/oauth/disconnect'), 'Autorização removida')) PANELS.shopify(panel);
           } }, 'Desconectar') : null,
-          h('button', { class: 'btn', onclick: async () => { await saveCfg(); const s = await attempt(() => post('/integrations/shopify/test')); if (s) toast(`Conectado à loja ${s.name}`, 'ok'); } }, 'Testar conexão'),
+          h('button', { class: 'btn', onclick: async () => {
+            await saveCfg();
+            const s = await attempt(() => post('/integrations/shopify/test'));
+            if (!s) return;
+            const w = s.webhook || {};
+            if (w.ok) toast(`Conectado à loja ${s.name}. Aviso de pedido novo (webhook) registrado ✓${s.enabled ? '' : ' — mas a "Integração ativa" está desmarcada!'}`, s.enabled ? 'ok' : 'warn');
+            else if (w.ok === false) toast(`Conectado à loja ${s.name}, mas o aviso de pedido novo (webhook) NÃO está registrado para este endereço${w.uri ? ` (está em ${w.uri})` : ''}. Clique em "Registrar webhook".`, 'warn');
+            else toast(`Conectado à loja ${s.name}. Não consegui conferir o webhook: ${w.error}`, 'warn');
+          } }, 'Testar conexão'),
           h('button', { class: 'btn', onclick: async () => {
             await saveCfg();
             if (await attempt(() => post('/integrations/shopify/register-webhook', { public_url: publicUrl.value }))) toast('Webhook registrado: novos pedidos já entram no quadro', 'ok');
@@ -228,7 +236,7 @@ const PANELS = {
         h('label', { class: 'form-row' }, 'Palavras no nome do produto', f.keywords),
         h('label', { class: 'form-row' }, 'Ou IDs de produtos', f.product_ids),
         h('label', { class: 'form-row' }, 'Ou tags / tipo de produto', f.tags),
-        h('p', { class: 'muted small' }, 'Basta uma regra bater (as palavras ignoram acentos e maiúsculas). Tags exigem a conexão com Client ID e Client secret. Deixe tudo vazio para trazer todos os pedidos.')),
+        h('p', { class: 'muted small' }, 'Basta uma regra bater (as palavras ignoram acentos e maiúsculas). As palavras valem para o nome do produto, a variante e o tipo do produto na Shopify (ex.: "noivado" pega o tipo "anéis de noivado" mesmo que o nome não diga). Tipo e tags exigem a loja conectada. Deixe tudo vazio para trazer todos os pedidos.')),
       h('fieldset', {}, h('legend', {}, '3. Como o card é criado'),
         h('label', { class: 'form-row' }, 'Coluna de entrada', f.column_id),
         h('label', { class: 'form-row' }, 'Quantidade de cards', f.mode),
@@ -254,7 +262,8 @@ const PANELS = {
           const r = await attempt(() => post('/integrations/shopify/refresh-links'));
           e.currentTarget.disabled = false;
           if (r) toast(`${r.updated} card(s) atualizados${r.missing ? `, ${r.missing} sem pedido encontrado` : ''}`, 'ok');
-        } }, 'Atualizar links dos pedidos')));
+        } }, 'Atualizar links dos pedidos')),
+      orderLogSection());
   },
 
   // ---------------- Correios ----------------
@@ -476,6 +485,41 @@ const PANELS = {
         h('button', { class: 'btn primary', onclick: () => attempt(() => post('/auth/password', { current: cur.value, password: next.value }), 'Senha alterada') }, 'Salvar')));
   },
 };
+
+/** Pedidos recebidos do Shopify: o que aconteceu com cada um + importar um pedido pelo número */
+function orderLogSection() {
+  const box = h('div', {});
+  const number = h('input', { placeholder: 'Nº do pedido, ex.: #200094684', style: { maxWidth: '260px' } });
+  const force = h('input', { type: 'checkbox' });
+  const importOne = async (name, forced) => {
+    const r = await attempt(() => post('/integrations/shopify/import-order', { name, force: forced }));
+    if (!r) return;
+    if (r.created) toast(`Pedido ${r.order}: ${r.created} card(s) criado(s)`, 'ok');
+    else toast(`Pedido ${r.order}: ${r.log?.status_label || 'nenhum card criado'}${r.log?.detail ? ` — ${r.log.detail}` : ''}`, 'warn');
+    loadBoard();
+    draw();
+  };
+  const SOURCE = { webhook: 'Automático', import: 'Importação', manual: 'Manual' };
+  async function draw() {
+    const rows = await get('/integrations/shopify/log').catch(() => []);
+    clear(box, rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'log-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Quando'), h('th', {}, 'Pedido'), h('th', {}, 'Origem'), h('th', {}, 'Resultado'), h('th', {}))),
+      h('tbody', {}, rows.map((r) => h('tr', {},
+        h('td', { class: 'nowrap' }, new Date(r.received_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })),
+        h('td', { class: 'nowrap' }, r.order_name || '—'),
+        h('td', {}, SOURCE[r.source] || r.source),
+        h('td', {}, h('span', { class: `chip ${r.status === 'created' ? 'ok' : r.status === 'exists' ? '' : 'late'}` }, r.status_label), r.detail ? h('div', { class: 'muted small' }, r.detail) : null),
+        h('td', {}, r.status === 'ignored' && r.order_name ? h('button', { class: 'btn small', onclick: () => importOne(r.order_name, true) }, 'Importar mesmo assim') : null)))))) : h('p', { class: 'muted small' }, 'Nenhum pedido recebido ainda desde esta atualização. Quando um pedido chegar pelo webhook, ele aparece aqui com o resultado.'));
+  }
+  draw();
+  return h('fieldset', {}, h('legend', {}, 'Pedidos recebidos'),
+    h('p', { class: 'muted small' }, 'Cada pedido que chega do Shopify (automático ou importado) fica registrado aqui, com o motivo quando não vira card. Se um pedido não entrou, importe pelo número:'),
+    h('div', { class: 'row wrap' }, number,
+      h('label', { class: 'check small' }, force, ' ignorar o filtro de produtos'),
+      h('button', { class: 'btn', onclick: () => { if (number.value.trim()) importOne(number.value.trim(), force.checked); } }, 'Importar pedido'),
+      h('button', { class: 'btn subtle', onclick: draw }, 'Atualizar lista')),
+    box);
+}
 
 function backgroundPicker(current, onPick) {
   const wrap = h('div', { class: 'bg-picker' });

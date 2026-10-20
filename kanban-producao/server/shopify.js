@@ -154,12 +154,14 @@ function matchLineItem(li, config, productInfo = {}) {
   const productIds = splitList(config.product_ids);
   const tags = splitList(config.tags).map(fold);
   if (!keywords.length && !productIds.length && !tags.length) return true; // sem filtro: todo pedido entra
-  const haystack = fold([li.title, li.variant_title, li.sku, li.vendor].join(' '));
-  if (keywords.some((k) => haystack.includes(k))) return true;
-  if (li.product_id && productIds.includes(li.product_id)) return true;
   const info = productInfo[li.product_id] || {};
   const productTags = (li.product_tags || info.tags || []).map(fold);
   const productType = fold(li.product_type || info.productType || '');
+  // As palavras valem para o nome, a variante, o SKU e também o TIPO do produto
+  // (ex.: "Anel de Ouro com Moissanite Lien" não diz "noivado", mas o tipo é "anéis de noivado")
+  const haystack = fold([li.title, li.variant_title, li.sku, li.vendor, productType].join(' '));
+  if (keywords.some((k) => haystack.includes(k))) return true;
+  if (li.product_id && productIds.includes(li.product_id)) return true;
   return tags.some((t) => productTags.includes(t) || productType === t);
 }
 
@@ -233,19 +235,59 @@ function buildCards(order, config, productInfo = {}) {
   });
 }
 
-/** Grava os cards de um pedido. Retorna quantos foram criados (pedidos repetidos são ignorados). */
-async function importOrder(order, config = getConfig(), userId = null) {
+// ---------------- Registro dos pedidos recebidos (para saber por que um pedido entrou ou não) ----------------
+const LOG_STATUS = { created: 'Card criado', exists: 'Já estava no quadro', ignored: 'Ignorado pelo filtro', disabled: 'Integração desligada', signature: 'Assinatura inválida', error: 'Erro' };
+
+function logOrder({ source = 'webhook', order = null, status, detail = '', cards = 0 }) {
+  q.run('INSERT INTO shopify_log (received_at, source, order_id, order_name, status, detail, cards) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    new Date().toISOString(), source, order?.id ? String(order.id) : null, order?.name || null, status, String(detail).slice(0, 500), cards);
+  q.run('DELETE FROM shopify_log WHERE id <= (SELECT id FROM shopify_log ORDER BY id DESC LIMIT 1 OFFSET 300)');
+}
+
+function recentLog(limit = 50) {
+  return q.all('SELECT * FROM shopify_log ORDER BY id DESC LIMIT ?', limit).map((r) => ({ ...r, status_label: LOG_STATUS[r.status] || r.status }));
+}
+
+/**
+ * Grava os cards de um pedido. Retorna quantos foram criados (pedidos repetidos são ignorados).
+ * force: ignora o filtro de produtos (importar manualmente um pedido que não bateu com as palavras).
+ */
+async function importOrder(order, config = getConfig(), userId = null, { source = 'import', force = false } = {}) {
+  try {
+    const created = await importOrderCards(order, force ? { ...config, keywords: '', product_ids: '', tags: '' } : config, userId, source);
+    return created;
+  } catch (err) {
+    logOrder({ source, order, status: 'error', detail: err.message });
+    throw err;
+  }
+}
+
+async function importOrderCards(order, config, userId, source) {
   if (!config.board_id || !config.column_id) throw new Error('Escolha o quadro e a coluna de entrada nas configurações do Shopify.');
   let productInfo = {};
-  if (splitList(config.tags).length && hasApiAccess(config)) {
+  // Tipo e tags do produto (o webhook não traz): usados pelo filtro quando o nome não basta
+  const filtering = splitList(config.tags).length || splitList(config.keywords).length;
+  if (filtering && hasApiAccess(config) && !order.line_items.every((li) => matchLineItem(li, config))) {
     const ids = [...new Set(order.line_items.filter((li) => li.product_id && !li.product_tags).map((li) => li.product_id))];
     if (ids.length) productInfo = await fetchProductInfo(config, ids).catch(() => ({}));
+  }
+  let planned = buildCards(order, config, productInfo);
+  if (!planned.length) {
+    const titles = order.line_items.map((li) => {
+      const type = li.product_type || productInfo[li.product_id]?.productType;
+      return `"${li.title}"${type ? ` (tipo: ${type})` : ''}`;
+    }).join(', ');
+    logOrder({ source, order, status: 'ignored', detail: `Nenhum produto bateu com o filtro: ${titles || 'pedido sem itens'}` });
+    return 0;
   }
   let created = 0;
   const correiosConfig = correios.getConfig();
   const withImages = config.attach_images !== false;
-  if (withImages) await enrichImages(order, config);
-  for (const data of buildCards(order, config, productInfo)) {
+  if (withImages) {
+    await enrichImages(order, config);
+    planned = buildCards(order, config, productInfo); // agora com as fotos dos produtos
+  }
+  for (const data of planned) {
     if (q.get('SELECT id FROM cards WHERE external_id = ?', data.externalId)) continue;
     if (correiosConfig.enabled) await applyCorreios(data, order, config, correiosConfig);
     try {
@@ -257,6 +299,7 @@ async function importOrder(order, config = getConfig(), userId = null) {
     }
   }
   if (created) logActivity(config.board_id, null, userId, 'shopify.imported', { order: order.name, cards: created });
+  logOrder({ source, order, status: created ? 'created' : 'exists', cards: created, detail: created ? '' : 'Os cards deste pedido já existiam' });
   return created;
 }
 
@@ -548,6 +591,22 @@ async function fetchRecentOrders(config, days = 30) {
   return orders;
 }
 
+/** Busca um pedido pelo número (#1001 ou 1001) */
+async function fetchOrderByName(config, name) {
+  const clean = String(name || '').trim().replace(/^#/, '');
+  if (!/^[\w-]+$/.test(clean)) throw new Error('Informe o número do pedido, ex.: #1001.');
+  const data = await graphql(config, `query($q: String) { orders(first: 1, query: $q) { nodes { ${ORDER_FIELDS} } } }`, { q: `name:${clean}` });
+  const o = data.orders.nodes[0];
+  if (!o) throw new Error(`Pedido #${clean} não encontrado na loja.`);
+  return normalizeGraphqlOrder(o, config.shop_domain);
+}
+
+/** Webhooks que o app tem registrados na loja (para conferir se os pedidos novos vão chegar) */
+async function listWebhooks(config) {
+  const data = await graphql(config, '{ webhookSubscriptions(first: 50) { nodes { id topic uri } } }');
+  return data.webhookSubscriptions.nodes;
+}
+
 async function fetchProductInfo(config, productIds) {
   const data = await graphql(config, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { id tags productType } } }`,
     { ids: productIds.map((id) => `gid://shopify/Product/${id}`) });
@@ -569,5 +628,5 @@ async function registerWebhook(config, callbackUrl) {
 module.exports = {
   SOURCES, getConfig, verifyHmac, normalizeRestOrder, normalizeGraphqlOrder, matchLineItem, buildCards,
   importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, attachOrderImages, DEFAULT_API_VERSION, authorizeUrl, verifyCallback, exchangeCode,
-  refreshOrderLinks, adminOrderUrl,
+  refreshOrderLinks, adminOrderUrl, logOrder, recentLog, fetchOrderByName, listWebhooks,
 };
