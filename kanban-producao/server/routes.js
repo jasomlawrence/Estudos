@@ -159,10 +159,14 @@ router.get('/boards/:id', (req, res) => {
   const archived = req.query.archived === '1' ? 1 : 0;
   const filter = cardFilter(String(req.query.q || '').trim());
   const prefs = Object.fromEntries(q.all('SELECT column_id, collapsed FROM column_prefs WHERE user_id = ?', req.user.id).map((p) => [p.column_id, !!p.collapsed]));
+  const newHours = Number(cards.boardPrefs(board.id).new_hours) || 0;
+  const newSince = newHours > 0 && !archived ? new Date(Date.now() - newHours * 36e5).toISOString() : null;
   const columns = cards.boardColumns(board.id).map((col) => {
     const rows = q.all(`SELECT * FROM cards c WHERE c.column_id = ? AND c.archived = ? ${filter.sql} ORDER BY c.position LIMIT ?`, col.id, archived, ...filter.params, limit);
     const total = q.get(`SELECT COUNT(*) AS n FROM cards c WHERE c.column_id = ? AND c.archived = ? ${filter.sql}`, col.id, archived, ...filter.params).n;
-    return { ...col, collapsed: !!prefs[col.id], total, cards: cards.serializeCards(rows) };
+    const newCount = newSince ? q.get(`SELECT COUNT(*) AS n FROM cards c WHERE c.column_id = ? AND c.archived = 0 AND c.created_at >= ?
+                                        AND (SELECT COUNT(*) FROM card_movements m WHERE m.card_id = c.id) <= 1`, col.id, newSince).n : 0;
+    return { ...col, collapsed: !!prefs[col.id], total, new_count: newCount, cards: cards.serializeCards(rows) };
   });
   res.json({
     board,
@@ -172,6 +176,7 @@ router.get('/boards/:id', (req, res) => {
     users: q.all('SELECT * FROM users WHERE active = 1 ORDER BY name').map(auth.publicUser),
     correios_enabled: !!correios.getConfig().enabled,
     chat_unread: comments.chatUnread(req.user.id, board.id),
+    new_hours: newHours,
   });
 });
 
@@ -241,7 +246,11 @@ router.get('/columns/:id/cards', (req, res) => {
 
 router.patch('/boards/:id', (req, res) => {
   const board = boardOr404(req.params.id);
-  const { name, background, cycle_start_column_id, cycle_end_column_id } = req.body;
+  const { name, background, cycle_start_column_id, cycle_end_column_id, new_hours } = req.body;
+  if (new_hours !== undefined) {
+    const hours = Math.min(Math.max(Number(new_hours) || 0, 0), 24 * 60);
+    setSetting(`board_prefs:${board.id}`, { ...getSetting(`board_prefs:${board.id}`, {}), new_hours: hours });
+  }
   if (name !== undefined) q.run('UPDATE boards SET name = ? WHERE id = ?', String(name).trim() || board.name, board.id);
   if (background !== undefined && /^(#[0-9a-f]{6}|g:[a-z-]+)$/i.test(background)) q.run('UPDATE boards SET background = ? WHERE id = ?', background, board.id);
   if (cycle_start_column_id !== undefined || cycle_end_column_id !== undefined) {
@@ -546,6 +555,13 @@ function removeFileIfUnused(filename) {
   if (q.get('SELECT 1 FROM attachments WHERE filename = ?', filename)) return;
   fs.rm(path.join(UPLOAD_DIR, filename), { force: true }, () => {});
 }
+
+// Duplicar card (para aproveitar as informações de um pedido parecido)
+router.post('/cards/:id/duplicate', (req, res) => {
+  const include = Array.isArray(req.body.include) ? req.body.include.filter((p) => cards.DUP_PARTS.includes(p)) : undefined;
+  const id = cards.duplicateCard(Number(req.params.id), { title: req.body.title, columnId: req.body.columnId, include }, req.user.id);
+  res.json(cards.cardDetail(id));
+});
 
 router.delete('/cards/:id', (req, res) => {
   const files = cards.deleteCard(Number(req.params.id), req.user.id);

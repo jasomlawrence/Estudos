@@ -949,3 +949,11 @@ body.selecting .board { padding-bottom: 90px; }
 .tag-list:empty { display: none; }
 .color-preview { display: inline-grid; place-items: center; min-width: 34px; height: 24px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--border); font-size: 11px; color: var(--muted); padding: 0 6px; }
 .field-def .field-type { max-width: 210px; font-size: 12px; padding: 4px 8px; }
+
+/* ---------- Cards novos ---------- */
+.new-pill { display: inline-flex; align-items: center; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; color: #fff; background: var(--accent-gradient); letter-spacing: .02em; }
+.card.is-new { box-shadow: 0 0 0 2px #a79bff, 0 6px 18px -6px rgba(124, 92, 255, .45); }
+.card.is-new.highlighted { box-shadow: 0 6px 18px -6px rgba(124, 92, 255, .45); }
+.new-count { font-size: 11px; font-weight: 800; color: #fff; background: var(--accent-gradient); padding: 2px 8px; border-radius: 999px; white-space: nowrap; animation: new-pulse 2.4s ease-in-out infinite; }
+@keyframes new-pulse { 50% { box-shadow: 0 0 0 4px rgba(167, 155, 255, .25); } }
+@media (prefers-reduced-motion: reduce) { .new-count { animation: none; } }

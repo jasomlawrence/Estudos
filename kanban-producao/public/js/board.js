@@ -100,7 +100,7 @@ export async function loadBoard({ keepScroll = true } = {}) {
   if (state.search) params.set('q', state.search);
   if (state.archived) params.set('archived', '1');
   const data = await get(`/boards/${state.boardId}?${params}`);
-  Object.assign(state, { board: data.board, columns: data.columns, labels: data.labels, fields: data.fields, users: data.users, correiosEnabled: data.correios_enabled, chatUnread: data.chat_unread || 0 });
+  Object.assign(state, { board: data.board, columns: data.columns, labels: data.labels, fields: data.fields, users: data.users, correiosEnabled: data.correios_enabled, chatUnread: data.chat_unread || 0, newHours: data.new_hours || 0 });
   state.boardStale = false;
   renderBoard(keepScroll);
   boardLoadedHooks.forEach((fn) => fn());
@@ -153,6 +153,7 @@ function columnElement(col) {
         onchange: (e) => attempt(() => patch(`/columns/${col.id}`, { name: e.target.value })),
       }),
       h('span', { class: 'count', title: 'Quantidade de cards' }, String(col.total)),
+      col.new_count ? h('span', { class: 'new-count', title: `${col.new_count} card(s) novo(s) nesta coluna` }, `✦ ${col.new_count}`) : null,
       cycle,
       state.selecting ? h('button', {
         class: `col-select${columnFullySelected(col) ? ' on' : ''}`, title: 'Selecionar todos os cards da coluna', disabled: !col.total,
@@ -317,7 +318,7 @@ export function cardElement(card) {
   const style = bg ? { background: bg, color: fg, '--card-fg': fg } : {};
   if (hl.length) style['--hl-ring'] = highlightRing(hl);
   return h('article', {
-    class: `card${bg ? ' colored' : ''}${hl.length ? ' highlighted' : ''}${state.selecting && isSelected(card.id) ? ' selected' : ''}`, dataset: { cardId: card.id }, tabIndex: 0, style,
+    class: `card${card.is_new ? ' is-new' : ''}${bg ? ' colored' : ''}${hl.length ? ' highlighted' : ''}${state.selecting && isSelected(card.id) ? ' selected' : ''}`, dataset: { cardId: card.id }, tabIndex: 0, style,
     title: hl.length ? `Automação: ${hl.map((x) => x.name).join(', ')}` : undefined,
     onclick: () => (state.selecting ? toggleCard(card) : openCard(card.id)),
     onkeydown: (e) => { if (e.key === 'Enter') (state.selecting ? toggleCard(card) : openCard(card.id)); },
@@ -329,7 +330,9 @@ export function cardElement(card) {
   }, icon('check', 14)),
   card.cover ? h('img', { class: 'card-cover', src: card.cover, alt: '', loading: 'lazy', decoding: 'async', draggable: false }) : null,
   h('div', { class: 'card-body' },
-    hl.some((x) => x.text) ? h('div', { class: 'card-alerts' }, hl.filter((x) => x.text).map((x) => h('span', { class: 'card-alert', style: { '--hl': x.color } }, x.text))) : null,
+    card.is_new || hl.some((x) => x.text) ? h('div', { class: 'card-alerts' },
+      card.is_new ? h('span', { class: 'new-pill', title: `Chegou ${new Date(card.created_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}` }, '✦ Novo') : null,
+      hl.filter((x) => x.text).map((x) => h('span', { class: 'card-alert', style: { '--hl': x.color } }, x.text))) : null,
     card.labels.length ? h('div', { class: 'card-labels' }, card.labels.map(labelById).filter(Boolean).map((l) => h('span', { class: 'label', style: { background: l.color, color: textColorFor(l.color) }, title: l.name }, l.name))) : null,
     h('div', { class: 'card-title' }, card.title),
     visibleFields.length ? h('dl', { class: 'card-fields' }, visibleFields.map((f) => [h('dt', {}, f.name), h('dd', {}, fieldChip(f, card.fields[f.id]))])) : null,
