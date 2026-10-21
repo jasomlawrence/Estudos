@@ -8,6 +8,9 @@ const test = require('node:test');
 const assert = require('node:assert');
 const correios = require('../server/correios');
 
+// Tags dos produtos (na vida real vêm da API da Shopify)
+const withTags = (o) => { o.line_items.forEach((li, i) => { li.product_tags = i === 0 ? ['solitario'] : []; }); return o; };
+
 test('lê a data de entrega em vários formatos', () => {
   assert.strictEqual(correios.parseDate('25/12/2026'), '2026-12-25');
   assert.strictEqual(correios.parseDate('5-1-27'), '2027-01-05');
@@ -70,8 +73,8 @@ test('pedido do Shopify: prazo do card = entrega prometida − Correios − folg
   order.id = 999; // pedido novo
   order.line_items[0].properties.push({ name: 'Data estimada de entrega:', value: '20/11/2026' });
   order.shipping_address.zip = '20010-000';
-  const config = { enabled: true, board_id: boardId, column_id: col, keywords: 'anel de noivado', mapping: { [dateField]: 'promised_date' }, due_days: 30, title_template: '{order_name}' };
-  assert.strictEqual(await shopify.importOrder(shopify.normalizeRestOrder(order, ''), config), 1);
+  const config = { enabled: true, board_id: boardId, column_id: col, tags: 'solitario', mapping: { [dateField]: 'promised_date' }, due_days: 30, title_template: '{order_name}' };
+  assert.strictEqual(await shopify.importOrder(withTags(shopify.normalizeRestOrder(order, '')), config), 1);
 
   const card = q.get('SELECT * FROM cards WHERE external_id LIKE ?', 'shopify:999:%');
   // 20/11 (feriado) − (2 + 1 folga) dias úteis = 17/11, às 15h de Brasília
@@ -87,7 +90,7 @@ test('pedido do Shopify: prazo do card = entrega prometida − Correios − folg
   // Sem data prometida: usa o prazo padrão e explica o motivo
   const order2 = JSON.parse(JSON.stringify(require('./fixtures/order.json')));
   order2.id = 1000;
-  await shopify.importOrder(shopify.normalizeRestOrder(order2, ''), config);
+  await shopify.importOrder(withTags(shopify.normalizeRestOrder(order2, '')), config);
   const card2 = q.get('SELECT * FROM cards WHERE external_id LIKE ?', 'shopify:1000:%');
   assert.match(card2.description, /Prazo dos Correios não calculado/);
   assert.strictEqual(card2.due_date.slice(0, 10), '2026-11-14');
@@ -96,7 +99,7 @@ test('pedido do Shopify: prazo do card = entrega prometida − Correios − folg
   const order3 = JSON.parse(JSON.stringify(require('./fixtures/order.json')));
   order3.id = 1001;
   order3.note = 'Presente!\nData estimada de entrega: 20 de nov. - 25 de nov.';
-  await shopify.importOrder(shopify.normalizeRestOrder(order3, ''), config);
+  await shopify.importOrder(withTags(shopify.normalizeRestOrder(order3, '')), config);
   const card3 = q.get('SELECT * FROM cards WHERE external_id LIKE ?', 'shopify:1001:%');
   assert.strictEqual(card3.promised_date, '2026-11-20');
   assert.strictEqual(card3.due_date, '2026-11-17T18:00:00.000Z');

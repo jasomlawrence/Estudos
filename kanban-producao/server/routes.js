@@ -864,6 +864,11 @@ router.post('/integrations/shopify/import-order', auth.requireAdmin, external(as
   res.json({ order: order.name, created, log: shopify.recentLog(1)[0] });
 }));
 
+// Tags dos produtos da loja (sugestões para o filtro)
+router.get('/integrations/shopify/tags', auth.requireAdmin, external(async (req, res) => {
+  res.json(await shopify.fetchStoreTags(shopify.getConfig()));
+}));
+
 // Últimos pedidos recebidos e o que aconteceu com cada um
 router.get('/integrations/shopify/log', auth.requireAdmin, (req, res) => {
   res.json(shopify.recentLog(Math.min(Number(req.query.limit) || 30, 300)));
@@ -872,8 +877,8 @@ router.get('/integrations/shopify/log', auth.requireAdmin, (req, res) => {
 router.post('/integrations/shopify/register-webhook', auth.requireAdmin, external(async (req, res) => {
   const base = String(req.body.public_url || getSetting('app', {}).public_url || '').replace(/\/$/, '');
   if (!/^https:\/\//.test(base)) throw httpError(400, 'Informe o endereço público (https) deste sistema.');
-  const id = await shopify.registerWebhook(shopify.getConfig(), `${base}/webhooks/shopify/orders`);
-  res.json({ id });
+  const created = await shopify.registerWebhook(shopify.getConfig(), `${base}/webhooks/shopify/orders`);
+  res.json({ created });
 }));
 
 // Autorização direta: devolve o link da Shopify onde o administrador aprova o acesso
@@ -908,9 +913,10 @@ router.post('/integrations/shopify/test', auth.requireAdmin, external(async (req
   let webhook = null;
   try {
     const hooks = await shopify.listWebhooks(config);
-    const orders = hooks.filter((w) => w.topic === 'ORDERS_CREATE');
-    const here = orders.find((w) => /\/webhooks\/shopify\/orders$/.test(w.uri) && w.uri.includes(req.get('host')));
-    webhook = { ok: !!here, uri: here?.uri || orders[0]?.uri || null, count: orders.length };
+    const ours = (w) => /\/webhooks\/shopify\/orders$/.test(w.uri) && w.uri.includes(req.get('host'));
+    const missing = shopify.WEBHOOK_TOPICS.filter((t) => !hooks.some((w) => w.topic === t && ours(w)));
+    const LABEL = { ORDERS_CREATE: 'pedido criado', ORDERS_PAID: 'pedido pago', ORDERS_CANCELLED: 'pedido cancelado' };
+    webhook = { ok: !missing.length, missing: missing.map((t) => LABEL[t]), uri: hooks.find((w) => w.topic === 'ORDERS_CREATE')?.uri || null };
   } catch (err) {
     webhook = { ok: null, error: err.message };
   }

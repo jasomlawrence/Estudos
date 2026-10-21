@@ -147,9 +147,6 @@ const PANELS = {
       access_token: h('input', { value: c.access_token, placeholder: 'shpat_… (só para apps antigos criados no admin)', autocomplete: 'off' }),
       api_version: h('input', { value: c.api_version, placeholder: c.default_api_version }),
       column_id: h('select', {}, cols.map((col) => h('option', { value: col.id, selected: col.id === c.column_id }, col.name))),
-      keywords: h('input', { value: c.keywords }),
-      product_ids: h('input', { value: c.product_ids, placeholder: 'IDs separados por vírgula' }),
-      tags: h('input', { value: c.tags, placeholder: 'ex.: anel-noivado' }),
       mode: h('select', {},
         [['line_item', 'Um card por produto do pedido'], ['unit', 'Um card por unidade (qtd. 2 = 2 cards)'], ['order', 'Um card por pedido']]
           .map(([v, l]) => h('option', { value: v, selected: v === c.mode }, l))),
@@ -180,6 +177,7 @@ const PANELS = {
       return h('tr', {}, h('td', {}, fd.name), h('td', {}, select, propInput));
     });
 
+    const tagEditor = productTagsEditor(String(c.tags || ''));
     const webhookUrl = `${location.origin}${c.webhook_path}`;
     const redirectUrl = `${location.origin}${c.oauth_redirect_path}`;
     const connectShopify = async () => {
@@ -190,8 +188,8 @@ const PANELS = {
     const collect = () => ({
       enabled: f.enabled.checked, shop_domain: f.shop_domain.value, webhook_secret: f.webhook_secret.value, access_token: f.access_token.value,
       client_id: f.client_id.value, client_secret: f.client_secret.value,
-      api_version: f.api_version.value, board_id: state.boardId, column_id: Number(f.column_id.value), keywords: f.keywords.value,
-      product_ids: f.product_ids.value, tags: f.tags.value, mode: f.mode.value, title_template: f.title_template.value,
+      api_version: f.api_version.value, board_id: state.boardId, column_id: Number(f.column_id.value),
+      tags: tagEditor.value(), mode: f.mode.value, title_template: f.title_template.value,
       due_days: Number(f.due_days.value), label_ids: [...labelSet], mapping, attach_images: f.attach_images.checked,
     });
     const saveCfg = () => attempt(() => put('/integrations/shopify', collect()), 'Configuração do Shopify salva');
@@ -231,13 +229,13 @@ const PANELS = {
             const s = await attempt(() => post('/integrations/shopify/test'));
             if (!s) return;
             const w = s.webhook || {};
-            if (w.ok) toast(`Conectado à loja ${s.name}. Aviso de pedido novo (webhook) registrado ✓${s.enabled ? '' : ' — mas a "Integração ativa" está desmarcada!'}`, s.enabled ? 'ok' : 'warn');
-            else if (w.ok === false) toast(`Conectado à loja ${s.name}, mas o aviso de pedido novo (webhook) NÃO está registrado para este endereço${w.uri ? ` (está em ${w.uri})` : ''}. Clique em "Registrar webhook".`, 'warn');
+            if (w.ok) toast(`Conectado à loja ${s.name}. Avisos de pedido criado, pago e cancelado (webhooks) registrados ✓${s.enabled ? '' : ' — mas a "Integração ativa" está desmarcada!'}`, s.enabled ? 'ok' : 'warn');
+            else if (w.ok === false) toast(`Conectado à loja ${s.name}, mas falta registrar o aviso de: ${w.missing.join(', ')}. Clique em "Registrar webhook".`, 'warn');
             else toast(`Conectado à loja ${s.name}. Não consegui conferir o webhook: ${w.error}`, 'warn');
           } }, 'Testar conexão'),
           h('button', { class: 'btn', onclick: async () => {
             await saveCfg();
-            if (await attempt(() => post('/integrations/shopify/register-webhook', { public_url: publicUrl.value }))) toast('Webhook registrado: novos pedidos já entram no quadro', 'ok');
+            if (await attempt(() => post('/integrations/shopify/register-webhook', { public_url: publicUrl.value }))) toast('Webhooks registrados (pedido criado, pago e cancelado): novos pedidos pagos já entram no quadro', 'ok');
           } }, 'Registrar webhook')),
         h('details', {}, h('summary', {}, 'Outras formas de conexão'),
           h('div', { class: 'form-row' }, 'Endereço do webhook', h('div', { class: 'row' }, h('code', { class: 'grow' }, webhookUrl), h('button', { class: 'btn small', onclick: () => { copyText(webhookUrl); toast('Copiado', 'ok'); } }, 'Copiar'))),
@@ -246,10 +244,9 @@ const PANELS = {
           h('label', { class: 'form-row' }, 'Token de app antigo (shpat_)', f.access_token),
           h('p', { class: 'muted small' }, 'Só para quem já tinha um app personalizado criado no admin antes de 2026. Se preenchido, ele é usado no lugar do Client ID/secret.'))),
       h('fieldset', {}, h('legend', {}, '2. Quais pedidos entram'),
-        h('label', { class: 'form-row' }, 'Palavras no nome do produto', f.keywords),
-        h('label', { class: 'form-row' }, 'Ou IDs de produtos', f.product_ids),
-        h('label', { class: 'form-row' }, 'Ou tags / tipo de produto', f.tags),
-        h('p', { class: 'muted small' }, 'Basta uma regra bater (as palavras ignoram acentos e maiúsculas). As palavras valem para o nome do produto, a variante e o tipo do produto na Shopify (ex.: "noivado" pega o tipo "anéis de noivado" mesmo que o nome não diga). Tipo e tags exigem a loja conectada. Deixe tudo vazio para trazer todos os pedidos.')),
+        h('p', { class: 'small' }, h('strong', {}, 'Só pedidos pagos. '), 'Pedidos pendentes (boleto/PIX ainda não pago) entram sozinhos quando o pagamento é confirmado. Pedidos cancelados ou reembolsados não entram, e os cards que já existiam são arquivados.'),
+        h('div', { class: 'form-row' }, 'Tags dos produtos que entram', tagEditor.el),
+        h('p', { class: 'muted small' }, 'Entra no quadro todo produto que tiver pelo menos uma destas tags (as tags que você coloca no produto, no admin da Shopify). Cada item do pedido é conferido separadamente: num pedido com anel + caixa de presente, só o anel vira card. Sem nenhuma tag cadastrada, nenhum pedido entra.')),
       h('fieldset', {}, h('legend', {}, '3. Como o card é criado'),
         h('label', { class: 'form-row' }, 'Coluna de entrada', f.column_id),
         h('label', { class: 'form-row' }, 'Quantidade de cards', f.mode),
@@ -269,13 +266,13 @@ const PANELS = {
             const r = await attempt(() => post('/integrations/shopify/import', { days: Number(days.value) }));
             if (r) { toast(`${r.orders} pedidos lidos, ${r.created} card(s) criados`, 'ok'); loadBoard(); }
           } }, 'Importar')),
-        h('p', { class: 'muted small' }, 'O botão "Abrir pedido" do card leva à página aberta do pedido (a mesma que o cliente recebe, ex.: account.sualoja.com.br/orders/…). Cards criados antes desta versão apontam para o admin; atualize-os aqui:'),
+        h('p', { class: 'muted small' }, 'Confere na Shopify todos os cards de pedidos: atualiza o link "Abrir pedido" (página aberta do pedido) e arquiva os cards de pedidos que foram cancelados ou reembolsados.'),
         h('button', { class: 'btn', onclick: async (e) => {
           e.currentTarget.disabled = true;
           const r = await attempt(() => post('/integrations/shopify/refresh-links'));
           e.currentTarget.disabled = false;
-          if (r) toast(`${r.updated} card(s) atualizados${r.missing ? `, ${r.missing} sem pedido encontrado` : ''}`, 'ok');
-        } }, 'Atualizar links dos pedidos')),
+          if (r) { toast(`${r.updated} link(s) atualizado(s)${r.archived ? `, ${r.archived} card(s) de pedidos cancelados arquivado(s)` : ''}${r.missing ? `, ${r.missing} sem pedido encontrado` : ''}`, 'ok'); loadBoard(); }
+        } }, 'Conferir pedidos (links e cancelados)')),
       orderLogSection());
   },
 
@@ -499,6 +496,32 @@ const PANELS = {
   },
 };
 
+/** Tags dos produtos que entram no quadro: etiquetas removíveis + campo com sugestões das tags da loja */
+function productTagsEditor(initial) {
+  const tags = initial.split(/[,;\n]/).map((t) => t.trim()).filter(Boolean);
+  const list = h('div', { class: 'tag-list' });
+  const datalist = h('datalist', { id: 'shopify-tags' });
+  const input = h('input', { list: 'shopify-tags', placeholder: 'Digite ou escolha uma tag (ex.: aneis-de-noivado-ouro) e tecle Enter', autocomplete: 'off' });
+  const warn = h('p', { class: 'error small' }, 'Nenhuma tag cadastrada: nenhum pedido vai entrar.');
+  const add = () => {
+    for (const t of input.value.split(',').map((x) => x.trim()).filter(Boolean)) if (!tags.some((x) => x.toLowerCase() === t.toLowerCase())) tags.push(t);
+    input.value = '';
+    draw();
+  };
+  const draw = () => {
+    clear(list, tags.map((t, i) => h('span', { class: 'tag-chip' }, t, h('button', { type: 'button', title: 'Tirar esta tag', onclick: () => { tags.splice(i, 1); draw(); } }, '×'))));
+    warn.hidden = tags.length > 0;
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add(); } });
+  input.addEventListener('change', () => { if (input.value.trim()) add(); });
+  get('/integrations/shopify/tags').then((all) => clear(datalist, all.map((t) => h('option', { value: t })))).catch(() => {});
+  draw();
+  return {
+    el: h('div', { class: 'tag-editor' }, list, h('div', { class: 'row' }, input, h('button', { type: 'button', class: 'btn small', onclick: add }, 'Adicionar')), datalist, warn),
+    value: () => tags.join(', '),
+  };
+}
+
 /** Pedidos recebidos do Shopify: o que aconteceu com cada um + importar um pedido pelo número */
 function orderLogSection() {
   const box = h('div', {});
@@ -528,7 +551,7 @@ function orderLogSection() {
   return h('fieldset', {}, h('legend', {}, 'Pedidos recebidos'),
     h('p', { class: 'muted small' }, 'Cada pedido que chega do Shopify (automático ou importado) fica registrado aqui, com o motivo quando não vira card. Se um pedido não entrou, importe pelo número:'),
     h('div', { class: 'row wrap' }, number,
-      h('label', { class: 'check small' }, force, ' ignorar o filtro de produtos'),
+      h('label', { class: 'check small' }, force, ' ignorar o filtro (tags e pagamento)'),
       h('button', { class: 'btn', onclick: () => { if (number.value.trim()) importOne(number.value.trim(), force.checked); } }, 'Importar pedido'),
       h('button', { class: 'btn subtle', onclick: draw }, 'Atualizar lista')),
     box);

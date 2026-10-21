@@ -2,7 +2,7 @@
 // Integração Shopify: recebe pedidos (webhook) e transforma pedidos de anel de noivado em cards
 const crypto = require('node:crypto');
 const { q, getSetting, setSetting } = require('./db');
-const { createCard, logActivity } = require('./cards');
+const { createCard, updateCard, logActivity } = require('./cards');
 const correios = require('./correios');
 const images = require('./images');
 
@@ -47,9 +47,7 @@ function getConfig() {
     api_version: DEFAULT_API_VERSION,
     board_id: null,
     column_id: null,
-    keywords: 'anel de noivado, noivado, solitário',
-    product_ids: '',
-    tags: '',
+    tags: '', // tags dos produtos que entram no quadro (únicas usadas no filtro)
     mode: 'line_item',
     title_template: '{order_name} · {customer_name} · {product_title}',
     mapping: {},
@@ -89,6 +87,7 @@ function normalizeRestOrder(o, shopDomain) {
     currency: o.currency,
     total_price: o.total_price,
     financial_status: o.financial_status || '',
+    cancelled_at: o.cancelled_at || null,
     customer_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || o.shipping_address?.name || o.billing_address?.name || '',
     shipping_address: formatAddress(o.shipping_address),
     zip: o.shipping_address?.zip || '',
@@ -125,6 +124,7 @@ function normalizeGraphqlOrder(o, shopDomain) {
     currency: o.currencyCode,
     total_price: o.totalPriceSet?.shopMoney?.amount,
     financial_status: (o.displayFinancialStatus || '').toLowerCase(),
+    cancelled_at: o.cancelledAt || null,
     customer_name: [c.firstName, c.lastName].filter(Boolean).join(' ') || o.shippingAddress?.name || '',
     shipping_address: formatAddress(addr),
     zip: o.shippingAddress?.zip || '',
@@ -148,22 +148,25 @@ function normalizeGraphqlOrder(o, shopDomain) {
   };
 }
 
-/** O item do pedido é um anel de noivado (ou o que estiver configurado)? */
+/**
+ * O item do pedido entra no quadro? Só pelas TAGS do produto cadastradas em Configurações → Shopify
+ * (ex.: "aneis-de-noivado-ouro", "solitario"). Sem tags cadastradas, nada entra (a não ser importando "mesmo assim").
+ */
 function matchLineItem(li, config, productInfo = {}) {
-  const keywords = splitList(config.keywords).map(fold);
-  const productIds = splitList(config.product_ids);
+  if (config.allow_all) return true;
   const tags = splitList(config.tags).map(fold);
-  if (!keywords.length && !productIds.length && !tags.length) return true; // sem filtro: todo pedido entra
-  const info = productInfo[li.product_id] || {};
-  const productTags = (li.product_tags || info.tags || []).map(fold);
-  const productType = fold(li.product_type || info.productType || '');
-  // As palavras valem para o nome, a variante, o SKU e também o TIPO do produto
-  // (ex.: "Anel de Ouro com Moissanite Lien" não diz "noivado", mas o tipo é "anéis de noivado")
-  const haystack = fold([li.title, li.variant_title, li.sku, li.vendor, productType].join(' '));
-  if (keywords.some((k) => haystack.includes(k))) return true;
-  if (li.product_id && productIds.includes(li.product_id)) return true;
-  return tags.some((t) => productTags.includes(t) || productType === t);
+  if (!tags.length) return false;
+  const productTags = (li.product_tags || productInfo[li.product_id]?.tags || []).map(fold);
+  return tags.some((t) => productTags.includes(t));
 }
+
+/** Só pedidos pagos (e não cancelados) viram card */
+const PAYMENT_LABELS = {
+  pending: 'pendente', authorized: 'autorizado', partially_paid: 'pago em parte', paid: 'pago', partially_refunded: 'reembolsado em parte',
+  refunded: 'reembolsado', voided: 'cancelado', expired: 'expirado',
+};
+const paymentLabel = (s) => PAYMENT_LABELS[s] || s || 'sem status';
+const isPaid = (order) => order.financial_status === 'paid' && !order.cancelled_at;
 
 function sourceValues(order, items) {
   const props = {};
@@ -236,7 +239,25 @@ function buildCards(order, config, productInfo = {}) {
 }
 
 // ---------------- Registro dos pedidos recebidos (para saber por que um pedido entrou ou não) ----------------
-const LOG_STATUS = { created: 'Card criado', exists: 'Já estava no quadro', ignored: 'Ignorado pelo filtro', disabled: 'Integração desligada', signature: 'Assinatura inválida', error: 'Erro' };
+const LOG_STATUS = {
+  created: 'Card criado', exists: 'Já estava no quadro', ignored: 'Ignorado pelo filtro', unpaid: 'Ainda não pago', cancelled: 'Cancelado',
+  disabled: 'Integração desligada', signature: 'Assinatura inválida', error: 'Erro',
+};
+
+/** Cards de um pedido (todos os itens/unidades) */
+const orderCards = (orderId) => q.all("SELECT * FROM cards WHERE external_id = ? OR external_id LIKE ?", `shopify:${orderId}`, `shopify:${orderId}:%`);
+
+/** Pedido cancelado/reembolsado: arquiva os cards dele (ficam em "Arquivados", com registro no histórico) */
+function archiveOrderCards(order, userId = null) {
+  let n = 0;
+  for (const card of orderCards(order.id)) {
+    if (card.archived) continue;
+    updateCard(card.id, { archived: true }, userId);
+    logActivity(card.board_id, card.id, userId, 'shopify.cancelled', { order: order.name || `#${order.id}` });
+    n++;
+  }
+  return n;
+}
 
 function logOrder({ source = 'webhook', order = null, status, detail = '', cards = 0 }) {
   q.run('INSERT INTO shopify_log (received_at, source, order_id, order_name, status, detail, cards) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -254,7 +275,7 @@ function recentLog(limit = 50) {
  */
 async function importOrder(order, config = getConfig(), userId = null, { source = 'import', force = false } = {}) {
   try {
-    const created = await importOrderCards(order, force ? { ...config, keywords: '', product_ids: '', tags: '' } : config, userId, source);
+    const created = await importOrderCards(order, force ? { ...config, allow_all: true } : config, userId, source, force);
     return created;
   } catch (err) {
     logOrder({ source, order, status: 'error', detail: err.message });
@@ -262,22 +283,37 @@ async function importOrder(order, config = getConfig(), userId = null, { source 
   }
 }
 
-async function importOrderCards(order, config, userId, source) {
+async function importOrderCards(order, config, userId, source, force = false) {
   if (!config.board_id || !config.column_id) throw new Error('Escolha o quadro e a coluna de entrada nas configurações do Shopify.');
+  if (order.cancelled_at) {
+    const archived = archiveOrderCards(order, userId);
+    logOrder({ source, order, status: 'cancelled', detail: `Pedido cancelado${archived ? ` — ${archived} card(s) arquivado(s)` : ''}` });
+    return 0;
+  }
+  if (!isPaid(order) && !force) {
+    logOrder({ source, order, status: 'unpaid', detail: `Pagamento ${paymentLabel(order.financial_status)}. O pedido entra sozinho quando for pago.` });
+    return 0;
+  }
+  // Tags dos produtos: o webhook não traz, então busca pela API
   let productInfo = {};
-  // Tipo e tags do produto (o webhook não traz): usados pelo filtro quando o nome não basta
-  const filtering = splitList(config.tags).length || splitList(config.keywords).length;
-  if (filtering && hasApiAccess(config) && !order.line_items.every((li) => matchLineItem(li, config))) {
+  if (!config.allow_all) {
+    if (!splitList(config.tags).length) {
+      logOrder({ source, order, status: 'ignored', detail: 'Nenhuma tag de produto cadastrada em Configurações → Shopify → "Quais pedidos entram".' });
+      return 0;
+    }
     const ids = [...new Set(order.line_items.filter((li) => li.product_id && !li.product_tags).map((li) => li.product_id))];
-    if (ids.length) productInfo = await fetchProductInfo(config, ids).catch(() => ({}));
+    if (ids.length) {
+      if (!hasApiAccess(config)) throw new Error('Conecte a loja (Client ID e Client secret) para o sistema ler as tags dos produtos.');
+      productInfo = await fetchProductInfo(config, ids);
+    }
   }
   let planned = buildCards(order, config, productInfo);
   if (!planned.length) {
     const titles = order.line_items.map((li) => {
-      const type = li.product_type || productInfo[li.product_id]?.productType;
-      return `"${li.title}"${type ? ` (tipo: ${type})` : ''}`;
-    }).join(', ');
-    logOrder({ source, order, status: 'ignored', detail: `Nenhum produto bateu com o filtro: ${titles || 'pedido sem itens'}` });
+      const tags = li.product_tags || productInfo[li.product_id]?.tags || [];
+      return `"${li.title}" (tags: ${tags.length ? tags.join(', ') : 'nenhuma'})`;
+    }).join('; ');
+    logOrder({ source, order, status: 'ignored', detail: `Nenhum produto tem as tags cadastradas: ${titles || 'pedido sem itens'}` });
     return 0;
   }
   let created = 0;
@@ -360,11 +396,16 @@ async function refreshOrderLinks(config = getConfig(), userId = null) {
   const ids = [...byOrder.keys()];
   let updated = 0;
   let missing = 0;
+  let archived = 0;
   for (let i = 0; i < ids.length; i += 50) {
     const chunk = ids.slice(i, i + 50);
-    const data = await graphql(config, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id statusPageUrl } } }`,
+    const data = await graphql(config, `query($ids: [ID!]!) { nodes(ids: $ids) { ... on Order { id name statusPageUrl cancelledAt displayFinancialStatus } } }`,
       { ids: chunk.map((id) => `gid://shopify/Order/${id}`) });
     const found = Object.fromEntries((data.nodes || []).filter((n) => n?.statusPageUrl).map((n) => [gidToId(n.id), n.statusPageUrl]));
+    // Pedidos cancelados ou reembolsados: arquiva os cards que ainda estão no quadro
+    for (const n of (data.nodes || []).filter((x) => x && (x.cancelledAt || ['REFUNDED', 'VOIDED'].includes(x.displayFinancialStatus)))) {
+      archived += archiveOrderCards({ id: gidToId(n.id), name: n.name }, userId);
+    }
     for (const id of chunk) {
       if (!found[id]) { missing += byOrder.get(id).length; continue; }
       for (const card of byOrder.get(id)) {
@@ -377,7 +418,7 @@ async function refreshOrderLinks(config = getConfig(), userId = null) {
   if (updated) {
     for (const boardId of new Set(rows.map((r) => r.board_id))) logActivity(boardId, null, userId, 'shopify.links', { cards: updated });
   }
-  return { cards: rows.length, updated, missing };
+  return { cards: rows.length, updated, missing, archived };
 }
 
 /**
@@ -561,7 +602,7 @@ async function graphql(config, query, variables = {}) {
 }
 
 const ORDER_FIELDS = `
-  id legacyResourceId name createdAt note email phone currencyCode displayFinancialStatus statusPageUrl
+  id legacyResourceId name createdAt note email phone currencyCode displayFinancialStatus statusPageUrl cancelledAt
   customAttributes { key value }
   totalPriceSet { shopMoney { amount } }
   customer { firstName lastName defaultEmailAddress { emailAddress } defaultPhoneNumber { phoneNumber } }
@@ -583,7 +624,7 @@ async function fetchRecentOrders(config, days = 30) {
       orders(first: 50, after: $after, sortKey: CREATED_AT, query: $q) {
         nodes { ${ORDER_FIELDS} }
         pageInfo { hasNextPage endCursor }
-      } }`, { q: `created_at:>=${since}`, after });
+      } }`, { q: `created_at:>=${since} financial_status:paid -status:cancelled`, after });
     orders.push(...data.orders.nodes.map((o) => normalizeGraphqlOrder(o, config.shop_domain)));
     if (!data.orders.pageInfo.hasNextPage) break;
     after = data.orders.pageInfo.endCursor;
@@ -613,20 +654,36 @@ async function fetchProductInfo(config, productIds) {
   return Object.fromEntries(data.nodes.filter(Boolean).map((p) => [gidToId(p.id), { tags: p.tags, productType: p.productType }]));
 }
 
+/** Avisos que o sistema precisa: pedido criado, pedido pago (boleto/PIX pagos depois) e pedido cancelado */
+const WEBHOOK_TOPICS = ['ORDERS_CREATE', 'ORDERS_PAID', 'ORDERS_CANCELLED'];
+
 async function registerWebhook(config, callbackUrl) {
   // Na API atual o endereço vai no campo `uri` (o antigo `callbackUrl` foi removido)
-  const data = await graphql(config, `mutation($url: String!) {
-    webhookSubscriptionCreate(topic: ORDERS_CREATE, webhookSubscription: { uri: $url, format: JSON }) {
-      webhookSubscription { id }
-      userErrors { field message }
-    } }`, { url: callbackUrl });
-  const errors = data.webhookSubscriptionCreate.userErrors;
-  if (errors.length) throw new Error(errors.map((e) => e.message).join('; '));
-  return data.webhookSubscriptionCreate.webhookSubscription.id;
+  const existing = await listWebhooks(config).catch(() => []);
+  const created = [];
+  for (const topic of WEBHOOK_TOPICS) {
+    if (existing.some((w) => w.topic === topic && w.uri === callbackUrl)) continue;
+    const data = await graphql(config, `mutation($topic: WebhookSubscriptionTopic!, $url: String!) {
+      webhookSubscriptionCreate(topic: $topic, webhookSubscription: { uri: $url, format: JSON }) {
+        webhookSubscription { id }
+        userErrors { field message }
+      } }`, { topic, url: callbackUrl });
+    const errors = data.webhookSubscriptionCreate.userErrors.filter((e) => !/already been taken|already exists/i.test(e.message));
+    if (errors.length) throw new Error(errors.map((e) => e.message).join('; '));
+    created.push(topic);
+  }
+  return created;
+}
+
+/** Tags usadas nos produtos da loja (para sugerir na tela), sem as tags técnicas de apps de opções */
+async function fetchStoreTags(config) {
+  const data = await graphql(config, '{ productTags(first: 2000) { nodes } }');
+  return (data.productTags?.nodes || []).filter((t) => !/^option-set-/.test(t)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
 }
 
 module.exports = {
   SOURCES, getConfig, verifyHmac, normalizeRestOrder, normalizeGraphqlOrder, matchLineItem, buildCards,
   importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, attachOrderImages, DEFAULT_API_VERSION, authorizeUrl, verifyCallback, exchangeCode,
   refreshOrderLinks, adminOrderUrl, logOrder, recentLog, fetchOrderByName, listWebhooks,
+  isPaid, archiveOrderCards, fetchStoreTags, WEBHOOK_TOPICS,
 };

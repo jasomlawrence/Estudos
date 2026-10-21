@@ -43,6 +43,7 @@ export function describe(a, { withCard = false } = {}) {
     case 'automation.ran': return `executou a automação ${q(d.rule)}${card}${d.actions ? `: ${d.actions}` : ''}`;
     case 'automation.saved': return `salvou a automação ${q(d.rule)}`;
     case 'automation.deleted': return `excluiu a automação ${q(d.rule)}`;
+    case 'shopify.cancelled': return `arquivou${card || ' o card'} porque o pedido ${d.order} foi cancelado na Shopify`;
     case 'shopify.links': return `atualizou o link de ${d.cards} pedido(s) do Shopify`;
     case 'shopify.imported': return `importou o pedido ${d.order} do Shopify (${d.cards} card${d.cards > 1 ? 's' : ''})`;
     case 'integration.shopify': return 'alterou a integração com o Shopify';

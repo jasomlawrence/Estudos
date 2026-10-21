@@ -19,10 +19,15 @@ test('valida a assinatura HMAC do webhook', () => {
   assert.ok(!shopify.verifyHmac(body, 'lixo', 'segredo'));
 });
 
-test('só itens de anel de noivado viram cards (ignora acentos/maiúsculas)', () => {
+// Tags dos produtos do pedido de exemplo (na vida real vêm da API da Shopify)
+const PRODUCT_INFO = { 777: { tags: ['aneis-de-noivado-ouro', 'solitario'] }, 888: { tags: ['presente'] } };
+
+test('só itens com as tags cadastradas viram cards (ignora acentos/maiúsculas)', () => {
   const o = shopify.normalizeRestOrder(order, 'loja.myshopify.com');
-  const cfg = { keywords: 'anel de noivado, solitario', mode: 'line_item', title_template: '{order_name} · {customer_name} · {product_title}', mapping: { 1: 'customer_name', 2: 'prop:Tamanho do aro', 3: 'variant_title' }, due_days: 30 };
-  const cards = shopify.buildCards(o, cfg);
+  const cfg = { tags: 'Anéis-de-Noivado-Ouro', mode: 'line_item', title_template: '{order_name} · {customer_name} · {product_title}', mapping: { 1: 'customer_name', 2: 'prop:Tamanho do aro', 3: 'variant_title' }, due_days: 30 };
+  assert.strictEqual(shopify.buildCards(o, cfg).length, 0, 'sem as tags do produto, nada entra');
+  assert.strictEqual(shopify.buildCards(o, { ...cfg, tags: '' }, PRODUCT_INFO).length, 0, 'sem tags cadastradas, nada entra');
+  const cards = shopify.buildCards(o, cfg, PRODUCT_INFO);
   assert.strictEqual(cards.length, 1);
   assert.strictEqual(cards[0].title, '#1001 · Maria Souza · Anel de Noivado Solitário');
   assert.strictEqual(cards[0].externalId, `shopify:${order.id}:${order.line_items[0].id}`);
@@ -34,13 +39,13 @@ test('só itens de anel de noivado viram cards (ignora acentos/maiúsculas)', ()
 
 test('modo "por unidade" cria um card para cada peça', () => {
   const o = shopify.normalizeRestOrder({ ...order, line_items: [{ ...order.line_items[0], quantity: 2 }] }, '');
-  const cards = shopify.buildCards(o, { keywords: 'noivado', mode: 'unit', title_template: '{order_name}' });
+  const cards = shopify.buildCards(o, { tags: 'solitario', mode: 'unit', title_template: '{order_name}' }, PRODUCT_INFO);
   assert.deepStrictEqual(cards.map((c) => c.title), ['#1001 (1/2)', '#1001 (2/2)']);
 });
 
 test('modo "por pedido" agrupa os itens', () => {
   const o = shopify.normalizeRestOrder(order, '');
-  const cards = shopify.buildCards(o, { keywords: '', mode: 'order', title_template: '{order_name}' });
+  const cards = shopify.buildCards(o, { tags: 'solitario, presente', mode: 'order', title_template: '{order_name}' }, PRODUCT_INFO);
   assert.strictEqual(cards.length, 1);
   assert.strictEqual(cards[0].externalId, `shopify:${order.id}`);
 });
@@ -53,7 +58,12 @@ test('webhook assinado cria o card uma única vez', async () => {
   const boardId = seedBoard(1);
   const col = q.get('SELECT id FROM columns WHERE board_id = ? ORDER BY position LIMIT 1', boardId);
   const field = q.get("SELECT id FROM field_defs WHERE board_id = ? AND name = 'Tamanho do aro'", boardId);
-  setSetting('shopify', { enabled: true, webhook_secret: 'segredo', board_id: boardId, column_id: col.id, keywords: 'anel de noivado', mapping: { [field.id]: 'prop:Tamanho do aro' }, due_days: 30 });
+  setSetting('shopify', { enabled: true, webhook_secret: 'segredo', shop_domain: 'loja.myshopify.com', access_token: 'shpat_x', board_id: boardId, column_id: col.id, tags: 'aneis-de-noivado-ouro', attach_images: false, mapping: { [field.id]: 'prop:Tamanho do aro' }, due_days: 30 });
+  // A API da Shopify responde as tags dos produtos; o resto (chamadas ao próprio servidor) segue normal
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts) => (String(url).includes('myshopify.com')
+    ? { ok: true, status: 200, json: async () => ({ data: { nodes: [{ id: 'gid://shopify/Product/777', tags: ['aneis-de-noivado-ouro'], productType: '' }, { id: 'gid://shopify/Product/888', tags: [], productType: '' }] } }) }
+    : realFetch(url, opts));
 
   const server = app.listen(0);
   const url = `http://localhost:${server.address().port}/webhooks/shopify/orders`;
@@ -67,8 +77,20 @@ test('webhook assinado cria o card uma única vez', async () => {
   assert.strictEqual((await send(appSig)).status, 200);
   assert.strictEqual((await send(hmac)).status, 200);
   assert.strictEqual((await send(hmac)).status, 200); // reenvio do Shopify
+  // Pedido pendente (boleto) não entra; cancelado arquiva o card
+  const pending = JSON.stringify({ ...order, id: 42, name: '#1042', financial_status: 'pending' });
+  await fetch(url, { method: 'POST', body: pending, headers: { 'X-Shopify-Hmac-Sha256': crypto.createHmac('sha256', 'segredo').update(pending).digest('base64'), 'X-Shopify-Topic': 'orders/create' } });
+  await new Promise((r) => setTimeout(r, 300));
+  assert.strictEqual(shopify.recentLog(1)[0].status, 'unpaid');
+  const cancelled = JSON.stringify({ ...order, financial_status: 'refunded', cancelled_at: '2026-10-20T19:28:51Z' });
+  await fetch(url, { method: 'POST', body: cancelled, headers: { 'X-Shopify-Hmac-Sha256': crypto.createHmac('sha256', 'segredo').update(cancelled).digest('base64'), 'X-Shopify-Topic': 'orders/cancelled' } });
   await new Promise((r) => setTimeout(r, 300));
   server.close();
+  global.fetch = realFetch;
+  assert.strictEqual(shopify.recentLog(1)[0].status, 'cancelled');
+  assert.match(shopify.recentLog(1)[0].detail, /1 card\(s\) arquivado/);
+  assert.strictEqual(q.get("SELECT archived FROM cards WHERE source = 'shopify'").archived, 1);
+  q.run("UPDATE cards SET archived = 0 WHERE source = 'shopify'");
 
   const cards = q.all("SELECT * FROM cards WHERE source = 'shopify'");
   assert.strictEqual(cards.length, 1);
@@ -180,9 +202,9 @@ test('o card leva ao link aberto do pedido (página de status) e cards antigos p
   const { q, setSetting } = require('../server/db');
   const STATUS = 'https://account.volpijoias.com.br/orders/becb70a092fcfb1c91da850e08544bf6';
   const rest = shopify.normalizeRestOrder({ ...order, order_status_url: STATUS }, 'atelie.myshopify.com');
-  const config = { ...shopify.getConfig(), keywords: 'anel de noivado' };
-  assert.strictEqual(shopify.buildCards(rest, config)[0].externalUrl, STATUS);
-  assert.match(shopify.buildCards(shopify.normalizeRestOrder(order, 'atelie.myshopify.com'), config)[0].externalUrl, /\/admin\/orders\//, 'sem link aberto, usa o admin');
+  const config = { ...shopify.getConfig(), tags: 'solitario' };
+  assert.strictEqual(shopify.buildCards(rest, config, PRODUCT_INFO)[0].externalUrl, STATUS);
+  assert.match(shopify.buildCards(shopify.normalizeRestOrder(order, 'atelie.myshopify.com'), config, PRODUCT_INFO)[0].externalUrl, /\/admin\/orders\//, 'sem link aberto, usa o admin');
 
   q.run("INSERT INTO users (name, email, password_hash, role) VALUES ('Admin', 'links@a.com', 'x', 'admin')");
   const boardId = require('../server/routes').seedBoard(1);
@@ -204,33 +226,33 @@ test('o card leva ao link aberto do pedido (página de status) e cards antigos p
   assert.strictEqual(card.admin_url, 'https://atelie.myshopify.com/admin/orders/777');
 });
 
-test('filtro: a palavra também vale para o tipo do produto; pedidos ignorados ficam registrados com o motivo', async () => {
-  const config = { keywords: 'anel de noivado, noivado, solitário', product_ids: '', tags: '' };
-  const lien = { title: 'Anel de Ouro com Moissanite de 50 ou ≈ 70pts Lien', variant_title: '70pts / Amarelo', product_id: '8376144986417' };
-  assert.ok(!shopify.matchLineItem(lien, config), 'só pelo nome não bate');
-  assert.ok(shopify.matchLineItem(lien, config, { 8376144986417: { productType: 'anéis de noivado', tags: [] } }), 'o tipo "anéis de noivado" bate com "noivado"');
-  assert.ok(!shopify.matchLineItem({ title: 'Aliança Trançada de Prata', product_id: '1' }, config, { 1: { productType: 'alianças de prata', tags: ['com-solitario'] } }), 'tags não entram na busca por palavras');
+test('filtro só por tags; pedido não pago fica de fora; ignorados ficam registrados com o motivo', async () => {
+  const lien = { title: 'Anel de Ouro com Moissanite de 50 ou ≈ 70pts Lien', product_id: '8376144986417' };
+  const info = { 8376144986417: { tags: ['aneis-de-noivado-ouro', 'moissanite'] }, 2: { tags: ['aliancas-de-prata', 'com-solitario'] } };
+  assert.ok(shopify.matchLineItem(lien, { tags: 'aneis-de-noivado-ouro' }, info));
+  assert.ok(!shopify.matchLineItem(lien, { tags: '' }, info), 'sem tags cadastradas, nada entra');
+  assert.ok(!shopify.matchLineItem({ title: 'Aliança Trançada de Prata', product_id: '2' }, { tags: 'solitario, aneis-de-noivado-ouro' }, info), 'tag precisa ser igual (com-solitario ≠ solitario)');
 
   const { q, setSetting } = require('../server/db');
   const boardId = q.get('SELECT id FROM boards LIMIT 1').id;
   const col = q.get('SELECT id FROM columns WHERE board_id = ? LIMIT 1', boardId).id;
   setSetting('shopify', { shop_domain: 'atelie.myshopify.com', access_token: 'shpat_x' });
-  global.fetch = async (url, opts) => {
-    const { query } = JSON.parse(opts.body);
-    if (query.includes('... on Product')) return { ok: true, status: 200, json: async () => ({ data: { nodes: [{ id: 'gid://shopify/Product/8376144986417', tags: [], productType: 'anéis de noivado' }, { id: 'gid://shopify/Product/2', tags: [], productType: 'alianças de prata' }] } }) };
-    return { ok: true, status: 200, json: async () => ({ data: { order: { lineItems: { nodes: [] } } } }) };
-  };
-  const cfg = { ...shopify.getConfig(), ...config, board_id: boardId, column_id: col, attach_images: false };
-  const base = { id: '777001', name: '#200094684', created_at: new Date().toISOString(), email: '', line_items: [] };
-  const ring = shopify.normalizeRestOrder({ ...base, line_items: [{ id: 11, title: lien.title, variant_title: lien.variant_title, product_id: 8376144986417, quantity: 1, price: '1000' }] }, 'atelie.myshopify.com');
-  assert.strictEqual(await shopify.importOrder(ring, cfg, null, { source: 'webhook' }), 1, 'pedido do anel Lien vira card');
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ data: { nodes: [
+    { id: 'gid://shopify/Product/8376144986417', tags: ['aneis-de-noivado-ouro'], productType: '' }, { id: 'gid://shopify/Product/2', tags: ['aliancas-de-prata'], productType: '' }] } }) });
+  const cfg = { ...shopify.getConfig(), tags: 'aneis-de-noivado-ouro', board_id: boardId, column_id: col, attach_images: false };
+  const base = { id: '777001', name: '#200094684', created_at: new Date().toISOString(), email: '', financial_status: 'paid', line_items: [] };
+  const ring = shopify.normalizeRestOrder({ ...base, line_items: [{ id: 11, title: lien.title, product_id: 8376144986417, quantity: 1, price: '1000' }] }, 'atelie.myshopify.com');
+  assert.strictEqual(await shopify.importOrder({ ...ring, financial_status: 'pending' }, cfg, null, { source: 'webhook' }), 0, 'pendente não entra');
+  assert.strictEqual(shopify.recentLog(1)[0].status, 'unpaid');
+  assert.match(shopify.recentLog(1)[0].detail, /pendente/);
+  assert.strictEqual(await shopify.importOrder(ring, cfg, null, { source: 'webhook' }), 1, 'pago entra');
   assert.strictEqual(shopify.recentLog(1)[0].status, 'created');
 
   const ali = shopify.normalizeRestOrder({ ...base, id: '777002', name: '#200094680', line_items: [{ id: 12, title: 'Aliança Trançada de Prata', product_id: 2, quantity: 1, price: '100' }] }, 'atelie.myshopify.com');
   assert.strictEqual(await shopify.importOrder(ali, cfg, null, { source: 'webhook' }), 0);
   let log = shopify.recentLog(1)[0];
   assert.strictEqual(log.status, 'ignored');
-  assert.match(log.detail, /Aliança Trançada de Prata.*tipo: alianças de prata/);
+  assert.match(log.detail, /Aliança Trançada de Prata.*tags: aliancas-de-prata/);
   assert.strictEqual(await shopify.importOrder(ali, cfg, null, { source: 'manual', force: true }), 1, 'importar mesmo assim ignora o filtro');
   assert.strictEqual(await shopify.importOrder(ali, cfg, null, { source: 'manual', force: true }), 0);
   log = shopify.recentLog(1)[0];

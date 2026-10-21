@@ -33,8 +33,11 @@ test('pedido do Shopify: baixa a foto do produto e usa como capa', async () => {
   };
   const order = JSON.parse(JSON.stringify(require('./fixtures/order.json')));
   order.line_items[0].properties.push({ name: 'Foto de referência', value: 'https://cdn.shopify.com/s/files/1/0001/uploads/ref-cliente.png' });
-  const config = { ...shopify.getConfig(), board_id: boardId, column_id: col, keywords: 'anel de noivado', title_template: '{order_name}' };
-  assert.strictEqual(await shopify.importOrder(shopify.normalizeRestOrder(order, 'atelie.myshopify.com'), config), 1);
+  const config = { ...shopify.getConfig(), board_id: boardId, column_id: col, tags: 'solitario', title_template: '{order_name}' };
+  const normalized = shopify.normalizeRestOrder(order, 'atelie.myshopify.com');
+  normalized.line_items[0].product_tags = ['solitario'];
+  normalized.line_items[1].product_tags = [];
+  assert.strictEqual(await shopify.importOrder(normalized, config), 1);
 
   const card = q.get("SELECT * FROM cards WHERE source = 'shopify'");
   const atts = q.all('SELECT * FROM attachments WHERE card_id = ? ORDER BY id', card.id);
