@@ -28,7 +28,7 @@ app.post('/webhooks/shopify/orders', express.raw({ type: '*/*', limit: '5mb' }),
   if (!order) return;
   if (!config.enabled) return shopify.logOrder({ order, status: 'disabled', detail: 'Marque "Integração ativa" em Configurações → Shopify.' });
   const topic = req.get('X-Shopify-Topic') || 'orders/create';
-  if (!/^orders\/(create|paid|updated)$/.test(topic)) return;
+  if (!/^orders\/(create|paid|cancelled)$/.test(topic)) return; // cancelado: arquiva os cards do pedido
   shopify.importOrder(shopify.normalizeRestOrder(order, config.shop_domain || req.get('X-Shopify-Shop-Domain')), config, null, { source: 'webhook' })
     .then((n) => n && console.log(`[shopify] pedido ${order.name}: ${n} card(s) criado(s)`))
     .catch((err) => console.error('[shopify]', err.message));

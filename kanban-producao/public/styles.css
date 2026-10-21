@@ -935,3 +935,11 @@ body.selecting .board { padding-bottom: 90px; }
 .chat-more { display: block; margin: 0 auto 8px; }
 .chat-panel footer { padding: 10px 12px 14px; border-top: 1px solid var(--border); }
 .chat-list { margin: 0; }
+
+/* ---------- Tags de produto (filtro do Shopify) ---------- */
+.tag-editor { display: flex; flex-direction: column; gap: 8px; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--primary-soft); color: var(--ink); border-radius: 999px; padding: 3px 4px 3px 10px; font-weight: 600; font-size: 13px; }
+.tag-chip button { border: 0; background: none; cursor: pointer; font-size: 15px; line-height: 1; color: var(--muted); padding: 0 4px; border-radius: 50%; }
+.tag-chip button:hover { color: var(--danger); }
+.tag-editor .row input { flex: 1; }
