@@ -246,7 +246,8 @@ const PANELS = {
       h('fieldset', {}, h('legend', {}, '2. Quais pedidos entram'),
         h('p', { class: 'small' }, h('strong', {}, 'Só pedidos pagos. '), 'Pedidos pendentes (boleto/PIX ainda não pago) entram sozinhos quando o pagamento é confirmado. Pedidos cancelados ou reembolsados não entram, e os cards que já existiam são arquivados.'),
         h('div', { class: 'form-row' }, 'Tags dos produtos que entram', tagEditor.el),
-        h('p', { class: 'muted small' }, 'Entra no quadro todo produto que tiver pelo menos uma destas tags (as tags que você coloca no produto, no admin da Shopify). Cada item do pedido é conferido separadamente: num pedido com anel + caixa de presente, só o anel vira card. Sem nenhuma tag cadastrada, nenhum pedido entra.')),
+        h('p', { class: 'muted small' }, 'Como usar: clique numa tag da lista para adicionar, ou digite uma tag e tecle Enter (ou clique em Adicionar). Uma de cada vez; para várias de uma vez, separe por vírgula. Para tirar, clique no × da tag. Depois clique em "Salvar", no fim da página.'),
+        h('p', { class: 'muted small' }, 'Entra no quadro todo produto que tiver pelo menos uma das tags escolhidas (as tags do produto no admin da Shopify). Cada item do pedido é conferido separadamente: num pedido com anel + caixa de presente, só o anel vira card. Sem nenhuma tag escolhida, nenhum pedido entra.')),
       h('fieldset', {}, h('legend', {}, '3. Como o card é criado'),
         h('label', { class: 'form-row' }, 'Coluna de entrada', f.column_id),
         h('label', { class: 'form-row' }, 'Quantidade de cards', f.mode),
@@ -496,28 +497,46 @@ const PANELS = {
   },
 };
 
-/** Tags dos produtos que entram no quadro: etiquetas removíveis + campo com sugestões das tags da loja */
+/**
+ * Tags dos produtos que entram no quadro: as escolhidas aparecem como etiquetas (× tira);
+ * embaixo, as tags da loja como botões (um clique adiciona), filtradas pelo que se digita.
+ */
 function productTagsEditor(initial) {
   const tags = initial.split(/[,;\n]/).map((t) => t.trim()).filter(Boolean);
+  let storeTags = [];
   const list = h('div', { class: 'tag-list' });
-  const datalist = h('datalist', { id: 'shopify-tags' });
-  const input = h('input', { list: 'shopify-tags', placeholder: 'Digite ou escolha uma tag (ex.: aneis-de-noivado-ouro) e tecle Enter', autocomplete: 'off' });
-  const warn = h('p', { class: 'error small' }, 'Nenhuma tag cadastrada: nenhum pedido vai entrar.');
+  const input = h('input', { placeholder: 'Digite uma tag (ex.: aneis-de-noivado-ouro) e tecle Enter', autocomplete: 'off', autocapitalize: 'off', enterkeyhint: 'done' });
+  const suggestions = h('div', { class: 'tag-suggestions' });
+  const status = h('p', { class: 'muted small' }, 'Buscando as tags dos produtos da loja…');
+  const warn = h('p', { class: 'error small' }, 'Nenhuma tag escolhida: nenhum pedido vai entrar.');
+  const has = (t) => tags.some((x) => x.toLowerCase() === t.toLowerCase());
+  const addTag = (t) => { if (t && !has(t)) tags.push(t); draw(); };
+  const pick = (t) => { input.value = ''; addTag(t); };
   const add = () => {
-    for (const t of input.value.split(',').map((x) => x.trim()).filter(Boolean)) if (!tags.some((x) => x.toLowerCase() === t.toLowerCase())) tags.push(t);
+    input.value.split(',').map((x) => x.trim()).filter(Boolean).forEach(addTag);
     input.value = '';
     draw();
+    input.focus();
   };
   const draw = () => {
-    clear(list, tags.map((t, i) => h('span', { class: 'tag-chip' }, t, h('button', { type: 'button', title: 'Tirar esta tag', onclick: () => { tags.splice(i, 1); draw(); } }, '×'))));
+    clear(list, tags.map((t, i) => h('span', { class: 'tag-chip' }, t, h('button', { type: 'button', title: 'Tirar esta tag', 'aria-label': `Tirar ${t}`, onclick: () => { tags.splice(i, 1); draw(); } }, '×'))));
     warn.hidden = tags.length > 0;
+    const term = input.value.trim().toLowerCase();
+    const shown = storeTags.filter((t) => !has(t) && (!term || t.toLowerCase().includes(term)));
+    clear(suggestions, shown.map((t) => h('button', { type: 'button', class: 'tag-suggestion', title: 'Clique para adicionar', onmousedown: (e) => e.preventDefault(), onclick: () => pick(t) }, `+ ${t}`)));
+    suggestions.hidden = !shown.length;
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add(); } });
-  input.addEventListener('change', () => { if (input.value.trim()) add(); });
-  get('/integrations/shopify/tags').then((all) => clear(datalist, all.map((t) => h('option', { value: t })))).catch(() => {});
+  input.addEventListener('input', () => { if (input.value.includes(',')) add(); else draw(); });
+  get('/integrations/shopify/tags')
+    .then((all) => { storeTags = all; status.textContent = all.length ? 'Tags dos produtos da sua loja (clique para adicionar):' : 'A loja ainda não tem tags nos produtos.'; draw(); })
+    .catch((err) => { status.textContent = `Não consegui buscar as tags da loja (${err.message}). Digite a tag exatamente como está no produto e tecle Enter.`; });
   draw();
   return {
-    el: h('div', { class: 'tag-editor' }, list, h('div', { class: 'row' }, input, h('button', { type: 'button', class: 'btn small', onclick: add }, 'Adicionar')), datalist, warn),
+    el: h('div', { class: 'tag-editor' },
+      h('small', { class: 'muted' }, 'Escolhidas:'), list, warn,
+      h('div', { class: 'row' }, input, h('button', { type: 'button', class: 'btn small primary', onclick: add }, 'Adicionar')),
+      status, suggestions),
     value: () => tags.join(', '),
   };
 }
