@@ -212,7 +212,7 @@ function chipColor(card) {
   const col = columnById(card.column_id);
   if (cal.prefs.color_by === 'column') return col?.color;
   if (cal.prefs.color_by === 'label') return labelById(card.labels[0])?.color || col?.color;
-  return card.color || col?.color;
+  return card.auto_color || card.color || col?.color;
 }
 
 function chip(card, time) {

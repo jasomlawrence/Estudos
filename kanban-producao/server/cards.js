@@ -60,6 +60,96 @@ function normalizeValue(def, value) {
   }
 }
 
+// ---------------- Trocar o tipo de um campo ----------------
+const LIST_TYPES = ['select', 'multiselect', 'checklist'];
+const TEXT_TYPES = ['text', 'textarea', 'url', 'email', 'phone'];
+const PALETTE_OPTIONS = ['#cde7ff', '#dcd3ff', '#ffe5b4', '#c7f0ec', '#ffd6e0', '#d4f8d4', '#fff3b0', '#ffd0c2', '#e2e8f0'];
+
+/** "25/12/2026", "2026-12-25" ou data/hora → AAAA-MM-DD */
+function textToDate(text) {
+  const t = String(text).trim();
+  let m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(t);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+/**
+ * Converte o valor de um card quando o campo muda de tipo. Retorna o valor novo (já normalizado)
+ * ou null quando não dá para aproveitar (ex.: "Ouro" → número).
+ */
+function convertFieldValue(oldDef, newDef, value) {
+  if (value === null || value === undefined) return null;
+  const from = oldDef.type;
+  const to = newDef.type;
+  const sameOptions = LIST_TYPES.includes(from) && LIST_TYPES.includes(to);
+  if (sameOptions) {
+    const ids = from === 'select' ? [value] : from === 'multiselect' ? value : value.done || [];
+    const valid = ids.filter((id) => newDef.options.some((o) => o.id === id));
+    if (to === 'select') return valid[0] ?? null;
+    if (to === 'multiselect') return valid.length ? valid : null;
+    return normalizeValue(newDef, { done: valid, extra: from === 'checklist' ? value.extra : [] });
+  }
+  if (['number', 'currency'].includes(from) && ['number', 'currency'].includes(to)) return value;
+  if (from === 'date' && to === 'datetime') return new Date(`${value}T12:00:00`).toISOString();
+  if (from === 'datetime' && to === 'date') return displayValue(oldDef, value).slice(0, 10).split('/').reverse().join('-');
+  const text = displayValue(oldDef, value).trim();
+  if (!text) return null;
+  switch (to) {
+    case 'number': case 'currency': {
+      const clean = text.replace(/[^\d,.-]/g, '');
+      return /\d/.test(clean) ? normalizeValue(newDef, clean) : null;
+    }
+    case 'date': return normalizeValue(newDef, textToDate(text));
+    case 'datetime': { const d = textToDate(text); return d ? new Date(`${d}T12:00:00`).toISOString() : null; }
+    case 'checkbox': return /^(✔\s*)?(sim|s|true|1|x|ok)$/i.test(text) ? true : /^(não|nao|n|false|0)$/i.test(text) ? false : null;
+    case 'select': return normalizeValue(newDef, text);
+    case 'multiselect': return normalizeValue(newDef, text.split(/\s*[,;|]\s*/));
+    case 'checklist': return normalizeValue(newDef, { done: [], extra: [{ label: text }] });
+    default: return text;
+  }
+}
+
+/**
+ * Muda o tipo de um campo convertendo os valores de todos os cards.
+ * Ao virar lista de opções a partir de texto, as opções são criadas com os textos já preenchidos.
+ * dryRun: só conta quantos valores seriam convertidos e quantos se perderiam.
+ */
+const changeFieldType = transaction((fieldId, type, { dryRun = false, userId = null } = {}) => {
+  const old = fieldDefs(q.get('SELECT board_id FROM field_defs WHERE id = ?', fieldId)?.board_id ?? -1).find((f) => f.id === fieldId);
+  if (!old) throw httpError(404, 'Campo não encontrado.');
+  if (!FIELD_TYPES.includes(type)) throw httpError(400, 'Tipo de campo inválido.');
+  const rows = q.all('SELECT card_id, value FROM card_field_values WHERE field_id = ?', fieldId).map((r) => ({ ...r, value: parseJSON(r.value, null) }));
+  let options = old.options;
+  if (LIST_TYPES.includes(type) && !LIST_TYPES.includes(old.type) && type !== 'checklist') {
+    const labels = new Map();
+    for (const r of rows) {
+      for (const part of displayValue(old, r.value).split(type === 'multiselect' ? /\s*[,;|]\s*/ : /$^/)) {
+        const label = part.trim().slice(0, 80);
+        if (label && !labels.has(label.toLowerCase()) && labels.size < 50) labels.set(label.toLowerCase(), label);
+      }
+    }
+    options = [...labels.values()].map((label, i) => ({ id: Math.random().toString(36).slice(2, 10), label, color: PALETTE_OPTIONS[i % PALETTE_OPTIONS.length] }));
+  }
+  const newDef = { ...old, type, options };
+  let converted = 0;
+  let lost = 0;
+  const results = rows.map((r) => {
+    const v = old.type === type ? r.value : convertFieldValue(old, newDef, r.value);
+    if (v === null || v === undefined) lost++; else converted++;
+    return { ...r, next: v ?? null };
+  });
+  if (dryRun || old.type === type) return { converted, lost, from: old.type, to: type };
+  q.run('UPDATE field_defs SET type = ?, options = ? WHERE id = ?', type, JSON.stringify(options), fieldId);
+  for (const r of results) {
+    if (r.next === null) q.run('DELETE FROM card_field_values WHERE card_id = ? AND field_id = ?', r.card_id, fieldId);
+    else q.run('UPDATE card_field_values SET value = ? WHERE card_id = ? AND field_id = ?', JSON.stringify(r.next), r.card_id, fieldId);
+  }
+  logActivity(old.board_id, null, userId, 'field.type_changed', { name: old.name, from: old.type, to: type, converted, lost });
+  setImmediate(() => boardChanged(old.board_id, userId));
+  return { converted, lost, from: old.type, to: type };
+});
+
 /** Progresso de um campo checklist: quantos itens marcados de quantos */
 function checklistProgress(def, value) {
   const total = def.options.length + (value?.extra?.length || 0);
@@ -349,6 +439,7 @@ function serializeCards(rows) {
   const withHighlights = (card) => {
     const v = visual[card.board_id];
     card.highlights = v ? rules.highlightsFor(card, v.rules, v.ctx) : [];
+    card.auto_color = v ? rules.autoColorFor(card, v.rules, v.ctx) : null;
     return card;
   };
   return rows.map((r) => withHighlights({
@@ -411,5 +502,5 @@ function httpError(status, message) {
 
 module.exports = {
   FIELD_TYPES, fieldDefs, normalizeValue, displayValue, logActivity, createCard, moveCard, updateCard, deleteCard,
-  serializeCards, groupedByCard, cardDetail, httpError, boardColumns, applyCycle, parseJSON, loadRules, sortColumn, checklistProgress, SORT_LABELS,
+  serializeCards, groupedByCard, cardDetail, httpError, changeFieldType, convertFieldValue, boardColumns, applyCycle, parseJSON, loadRules, sortColumn, checklistProgress, SORT_LABELS,
 };

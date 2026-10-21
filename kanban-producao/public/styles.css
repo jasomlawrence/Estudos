@@ -947,3 +947,5 @@ body.selecting .board { padding-bottom: 90px; }
 .tag-suggestion { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
 .tag-suggestion:hover { border-color: var(--primary); color: var(--primary); }
 .tag-list:empty { display: none; }
+.color-preview { display: inline-grid; place-items: center; min-width: 34px; height: 24px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--border); font-size: 11px; color: var(--muted); padding: 0 6px; }
+.field-def .field-type { max-width: 210px; font-size: 12px; padding: 4px 8px; }

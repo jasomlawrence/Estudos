@@ -306,16 +306,18 @@ function addCardElement(col) {
 
 // ---------------- Cards ----------------
 export function cardElement(card) {
-  const fg = card.color ? textColorFor(card.color) : null;
+  // Cor automática (automação "cor do card") vale enquanto o card atende à regra; senão, a cor escolhida no card
+  const bg = card.auto_color || card.color;
+  const fg = bg ? textColorFor(bg) : null;
   const visibleFields = state.fields.filter((f) => f.show_on_card && card.fields[f.id] !== undefined && card.fields[f.id] !== null);
   const due = dueBadge(card);
   const timer = card.cycle_started_at ? h('span', { class: `badge ${card.cycle_ended_at ? 'done' : ''}`, title: card.cycle_ended_at ? 'Tempo total de produção' : 'Em produção há' },
     icon('clock', 13), fmtDuration(Date.parse(card.cycle_ended_at || new Date().toISOString()) - Date.parse(card.cycle_started_at))) : null;
   const hl = card.highlights || [];
-  const style = card.color ? { background: card.color, color: fg, '--card-fg': fg } : {};
+  const style = bg ? { background: bg, color: fg, '--card-fg': fg } : {};
   if (hl.length) style['--hl-ring'] = highlightRing(hl);
   return h('article', {
-    class: `card${card.color ? ' colored' : ''}${hl.length ? ' highlighted' : ''}${state.selecting && isSelected(card.id) ? ' selected' : ''}`, dataset: { cardId: card.id }, tabIndex: 0, style,
+    class: `card${bg ? ' colored' : ''}${hl.length ? ' highlighted' : ''}${state.selecting && isSelected(card.id) ? ' selected' : ''}`, dataset: { cardId: card.id }, tabIndex: 0, style,
     title: hl.length ? `Automação: ${hl.map((x) => x.name).join(', ')}` : undefined,
     onclick: () => (state.selecting ? toggleCard(card) : openCard(card.id)),
     onkeydown: (e) => { if (e.key === 'Enter') (state.selecting ? toggleCard(card) : openCard(card.id)); },

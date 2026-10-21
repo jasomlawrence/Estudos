@@ -105,4 +105,14 @@ function renderMessage(template, vars) {
   });
 }
 
-module.exports = { fieldMatches, conditionMatches, cardMatches, highlightsFor, triggerMatches, renderMessage, fold };
+/** Cor automática do card (regra "sempre" com a ação "cor do card"): a primeira regra da lista que o card atende */
+function autoColorFor(card, rules, ctx) {
+  for (const rule of rules) {
+    if (!rule.enabled || rule.trigger.type !== 'always') continue;
+    const paint = rule.actions.find((a) => a.type === 'paint');
+    if (paint && cardMatches(card, rule.conditions, ctx)) return paint.color;
+  }
+  return null;
+}
+
+module.exports = { fieldMatches, conditionMatches, cardMatches, highlightsFor, autoColorFor, triggerMatches, renderMessage, fold };

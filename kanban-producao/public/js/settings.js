@@ -615,7 +615,20 @@ function fieldDefEditor(f, index, redraw) {
     h('div', { class: 'row' },
       h('span', { class: 'drag-handle', title: 'Arraste para mudar a ordem' }, '⋮⋮'),
       name,
-      h('span', { class: 'chip' }, FIELD_TYPES.find(([v]) => v === f.type)?.[1]),
+      h('select', { class: 'field-type', title: 'Tipo do campo (pode ser trocado)', onchange: async (e) => {
+        const type = e.target.value;
+        const label = FIELD_TYPES.find(([v]) => v === type)?.[1];
+        const preview = await attempt(() => post(`/fields/${f.id}/type`, { type, dry_run: true }));
+        if (!preview) { e.target.value = f.type; return; }
+        const msg = `Mudar "${f.name}" para "${label}"?`
+          + (preview.converted || preview.lost ? `\n\n${preview.converted} valor(es) preenchido(s) nos cards serão convertidos` : '')
+          + (preview.lost ? ` e ${preview.lost} serão APAGADOS por não combinarem com o novo tipo (ex.: texto que não é número).` : '.')
+          + (['select', 'multiselect'].includes(type) && !['select', 'multiselect', 'checklist'].includes(f.type) ? '\n\nAs opções da lista serão criadas com os textos já preenchidos.' : '');
+        if (!(await confirmDialog(msg, { ok: 'Mudar tipo', danger: preview.lost > 0 }))) { e.target.value = f.type; return; }
+        const r = await attempt(() => post(`/fields/${f.id}/type`, { type }));
+        if (r) { toast(`Tipo alterado: ${r.converted} valor(es) convertido(s)${r.lost ? `, ${r.lost} apagado(s)` : ''}`, 'ok'); redraw(); }
+        else e.target.value = f.type;
+      } }, FIELD_TYPES.map(([v, l]) => h('option', { value: v, selected: v === f.type }, l))),
       h('label', { class: 'check' }, show, ' Mostrar no card'),
       h('button', { class: 'btn small primary', onclick: async () => {
         if (await attempt(() => patch(`/fields/${f.id}`, { name: name.value, show_on_card: show.checked, options: hasOptions ? options : undefined }), 'Campo salvo')) redraw();

@@ -375,6 +375,11 @@ router.post('/boards/:id/fields', (req, res) => {
   res.json({ id: Number(info.lastInsertRowid) });
 });
 
+// Trocar o tipo do campo (dry_run: só conta quantos valores seriam convertidos/perdidos)
+router.post('/fields/:id/type', (req, res) => {
+  res.json(cards.changeFieldType(Number(req.params.id), String(req.body.type || ''), { dryRun: !!req.body.dry_run, userId: req.user.id }));
+});
+
 router.patch('/fields/:id', (req, res) => {
   const f = q.get('SELECT * FROM field_defs WHERE id = ?', req.params.id);
   if (!f) throw httpError(404, 'Campo não encontrado.');
