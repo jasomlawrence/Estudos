@@ -36,16 +36,21 @@ async function attachRemoteImages(cardId, urls, { userId = null, makeCover = tru
   for (const url of [...new Set(urls.filter(Boolean))].slice(0, 10)) {
     if (q.get('SELECT 1 FROM attachments WHERE card_id = ? AND source_url = ?', cardId, url)) continue;
     try {
-      const res = await fetch(sizedUrl(url), { signal: AbortSignal.timeout(20000) });
-      const type = (res.headers.get('content-type') || '').split(';')[0].trim();
-      if (!res.ok || !type.startsWith('image/')) throw new Error(`resposta ${res.status} ${type}`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length > MAX_BYTES) throw new Error('imagem maior que 15 MB');
-      const filename = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${EXT[type] || '.img'}`;
-      fs.writeFileSync(path.join(UPLOAD_DIR, filename), buf);
       const original = decodeURIComponent(new URL(url).pathname.split('/').pop() || 'foto') || 'foto';
+      // A foto do produto é igual em todos os pedidos dele: reaproveita o arquivo já baixado (economiza disco)
+      const known = q.get('SELECT filename, mime, size FROM attachments WHERE source_url = ? ORDER BY id DESC LIMIT 1', url);
+      let file = known && fs.existsSync(path.join(UPLOAD_DIR, known.filename)) ? known : null;
+      if (!file) {
+        const res = await fetch(sizedUrl(url), { signal: AbortSignal.timeout(20000) });
+        const type = (res.headers.get('content-type') || '').split(';')[0].trim();
+        if (!res.ok || !type.startsWith('image/')) throw new Error(`resposta ${res.status} ${type}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > MAX_BYTES) throw new Error('imagem maior que 15 MB');
+        file = { filename: `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${EXT[type] || '.img'}`, mime: type, size: buf.length };
+        fs.writeFileSync(path.join(UPLOAD_DIR, file.filename), buf);
+      }
       const info = q.run(`INSERT INTO attachments (card_id, filename, original_name, mime, size, uploaded_by, created_at, source_url)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, cardId, filename, original, type, buf.length, userId, now(), url);
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, cardId, file.filename, original, file.mime, file.size, userId, now(), url);
       cards.logActivity(card.board_id, cardId, userId, 'attachment.added', { name: original });
       added++;
       const current = q.get('SELECT cover_attachment_id FROM cards WHERE id = ?', cardId);

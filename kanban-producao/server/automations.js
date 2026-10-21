@@ -170,10 +170,17 @@ const matchKey = (rule, cardId) => `auto:${rule.id}:${cardId}`;
 async function checkMatchRules(boardId, cardIds = null) {
   const list = cards.loadRules(boardId).filter((r) => r.enabled && r.trigger.type === 'match' && r.conditions.length);
   if (!list.length) return;
-  const rows = cardIds
-    ? cardIds.map((id) => q.get('SELECT * FROM cards WHERE id = ? AND archived = 0', id)).filter(Boolean)
-    : q.all('SELECT * FROM cards WHERE board_id = ? AND archived = 0', boardId);
+  const ids = cardIds || q.all('SELECT id FROM cards WHERE board_id = ? AND archived = 0', boardId).map((r) => r.id);
   const ctx = { now: Date.now(), fields: cards.fieldDefs(boardId) };
+  // Em lotes de 300 cards: com milhares de cards a memória do servidor não dispara
+  for (let i = 0; i < ids.length; i += 300) {
+    const chunk = ids.slice(i, i + 300);
+    const rows = q.all(`SELECT * FROM cards WHERE archived = 0 AND id IN (${chunk.map(() => '?').join(',')})`, ...chunk);
+    await checkRows(rows, list, ctx);
+  }
+}
+
+async function checkRows(rows, list, ctx) {
   for (const card of cards.serializeCards(rows)) {
     for (const rule of list) {
       const key = matchKey(rule, card.id);
