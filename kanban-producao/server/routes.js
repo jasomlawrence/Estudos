@@ -536,9 +536,15 @@ router.post('/cards/printed', (req, res) => {
   res.json({ ok: true });
 });
 
+/** A mesma foto de produto pode estar em vários cards (arquivo compartilhado): só apaga se ninguém mais usa */
+function removeFileIfUnused(filename) {
+  if (q.get('SELECT 1 FROM attachments WHERE filename = ?', filename)) return;
+  fs.rm(path.join(UPLOAD_DIR, filename), { force: true }, () => {});
+}
+
 router.delete('/cards/:id', (req, res) => {
   const files = cards.deleteCard(Number(req.params.id), req.user.id);
-  for (const f of files) fs.rm(path.join(UPLOAD_DIR, f), { force: true }, () => {});
+  for (const f of files) removeFileIfUnused(f);
   res.json({ ok: true });
 });
 
@@ -606,7 +612,7 @@ router.delete('/attachments/:id', (req, res) => {
   if (!a) throw httpError(404, 'Anexo não encontrado.');
   if (a.cover_attachment_id === a.id) cards.updateCard(a.card_id, { cover_attachment_id: null }, req.user.id);
   q.run('DELETE FROM attachments WHERE id = ?', a.id);
-  fs.rm(path.join(UPLOAD_DIR, a.filename), { force: true }, () => {});
+  removeFileIfUnused(a.filename);
   logActivity(a.board_id, a.card_id, req.user.id, 'attachment.removed', { name: a.original_name });
   events.boardChanged(a.board_id, req.user.id, a.card_id);
   res.json(cards.cardDetail(a.card_id));
@@ -721,7 +727,9 @@ router.get('/boards/:id/metrics', (req, res) => {
 
 // ---------------- Painel (dashboard) ----------------
 const TZ = process.env.TZ || 'America/Sao_Paulo';
-const localDay = (iso) => new Date(iso).toLocaleDateString('en-CA', { timeZone: TZ }); // AAAA-MM-DD no fuso da loja
+// AAAA-MM-DD no fuso da loja (formatador criado uma vez: toLocaleDateString a cada chamada é lento com milhares de cards)
+const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+const localDay = (iso) => dayFormat.format(new Date(iso));
 function mondayOf(day) {
   const d = new Date(`${day}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
@@ -761,18 +769,28 @@ function dashboardData(boardId, nowMs = Date.now()) {
   // Semanas (segunda a domingo) — 8 últimas, da mais antiga para a atual
   const thisWeek = mondayOf(localDay(nowISO));
   const weeks = Array.from({ length: 8 }, (_, i) => addDaysISO(thisWeek, (i - 7) * 7));
+  // Dia local de entrada e de conclusão de cada card, calculado uma vez só
+  const firstDay = weeks[0];
+  const createdDay = new Map();
+  const endedDay = new Map();
+  for (const c of rows) {
+    if (c.created_at >= since(70)) createdDay.set(c, localDay(c.created_at));
+    if (c.cycle_ended_at && c.cycle_ended_at >= since(70)) endedDay.set(c, localDay(c.cycle_ended_at));
+  }
   const weekly = weeks.map((w) => {
     const next = addDaysISO(w, 7);
-    const inWeek = (iso) => iso && localDay(iso) >= w && localDay(iso) < next;
-    const finished = rows.filter((c) => inWeek(c.cycle_ended_at));
+    const inWeek = (day) => day && day >= w && day < next && day >= firstDay;
+    const finished = [...endedDay].filter(([, d]) => inWeek(d)).map(([c]) => c);
     const lead = finished.map((c) => cycleMs(c)).filter((ms) => ms != null);
-    return { week: w, created: rows.filter((c) => inWeek(c.created_at)).length, done: finished.length, on_time: onTime(finished), avg_ms: avg(lead) };
+    return { week: w, created: [...createdDay.values()].filter(inWeek).length, done: finished.length, on_time: onTime(finished), avg_ms: avg(lead) };
   });
 
   // Tempo médio em cada etapa (cards concluídos nos últimos 90 dias)
   const perColumn = {};
-  for (const card of doneIn(since(90))) {
-    const moves = q.all('SELECT * FROM card_movements WHERE card_id = ? ORDER BY moved_at, id', card.id);
+  const recentDone = doneIn(since(90));
+  const movesByCard = cards.groupedByCard('SELECT * FROM card_movements WHERE card_id IN (%IDS%) ORDER BY moved_at, id', recentDone.map((c) => c.id));
+  for (const card of recentDone) {
+    const moves = movesByCard.get(card.id) || [];
     for (const [colId, ms] of Object.entries(columnDurations(moves, card.cycle_ended_at))) {
       if (Number(colId) !== end?.id) (perColumn[colId] ||= []).push(ms);
     }

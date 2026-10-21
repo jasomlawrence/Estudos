@@ -317,16 +317,29 @@ function loadRules(boardId) {
 }
 
 /** Dados resumidos de vários cards, para exibir no quadro. */
+/** Busca em lotes (o SQLite limita a quantidade de "?" por consulta) e agrupa as linhas por card */
+function groupedByCard(sql, ids) {
+  const map = new Map();
+  for (let i = 0; i < ids.length; i += 900) {
+    const chunk = ids.slice(i, i + 900);
+    for (const row of q.all(sql.replace('%IDS%', chunk.map(() => '?').join(',')), ...chunk)) {
+      const list = map.get(row.card_id);
+      if (list) list.push(row); else map.set(row.card_id, [row]);
+    }
+  }
+  return map;
+}
+
+/** Dados resumidos de vários cards, para exibir no quadro (cresce em proporção ao número de cards) */
 function serializeCards(rows) {
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
-  const marks = ids.map(() => '?').join(',');
-  const labels = q.all(`SELECT card_id, label_id FROM card_labels WHERE card_id IN (${marks})`, ...ids);
-  const members = q.all(`SELECT card_id, user_id FROM card_members WHERE card_id IN (${marks})`, ...ids);
-  const values = q.all(`SELECT card_id, field_id, value FROM card_field_values WHERE card_id IN (${marks})`, ...ids);
-  const atts = q.all(`SELECT card_id, COUNT(*) AS n FROM attachments WHERE card_id IN (${marks}) GROUP BY card_id`, ...ids);
-  const comments = q.all(`SELECT card_id, COUNT(*) AS n FROM comments WHERE card_id IN (${marks}) GROUP BY card_id`, ...ids);
-  const covers = q.all(`SELECT a.id, a.filename, a.card_id FROM attachments a JOIN cards c ON c.cover_attachment_id = a.id WHERE c.id IN (${marks})`, ...ids);
+  const labels = groupedByCard('SELECT card_id, label_id FROM card_labels WHERE card_id IN (%IDS%)', ids);
+  const members = groupedByCard('SELECT card_id, user_id FROM card_members WHERE card_id IN (%IDS%)', ids);
+  const values = groupedByCard('SELECT card_id, field_id, value FROM card_field_values WHERE card_id IN (%IDS%)', ids);
+  const atts = groupedByCard('SELECT card_id, COUNT(*) AS n FROM attachments WHERE card_id IN (%IDS%) GROUP BY card_id', ids);
+  const comments = groupedByCard('SELECT card_id, COUNT(*) AS n FROM comments WHERE card_id IN (%IDS%) GROUP BY card_id', ids);
+  const covers = groupedByCard('SELECT a.id, a.filename, a.card_id FROM attachments a JOIN cards c ON c.cover_attachment_id = a.id WHERE c.id IN (%IDS%)', ids);
   // Regras de destaque visual ("sempre"), por quadro
   const visual = {};
   for (const boardId of new Set(rows.map((r) => r.board_id))) {
@@ -358,13 +371,13 @@ function serializeCards(rows) {
     cycle_ended_at: r.cycle_ended_at,
     created_at: r.created_at,
     updated_at: r.updated_at,
-    cover: covers.find((c) => c.card_id === r.id) ? `/uploads/${covers.find((c) => c.card_id === r.id).filename}` : null,
+    cover: covers.has(r.id) ? `/uploads/${covers.get(r.id)[0].filename}` : null,
     cover_attachment_id: r.cover_attachment_id,
-    labels: labels.filter((l) => l.card_id === r.id).map((l) => l.label_id),
-    members: members.filter((m) => m.card_id === r.id).map((m) => m.user_id),
-    fields: Object.fromEntries(values.filter((v) => v.card_id === r.id).map((v) => [v.field_id, parseJSON(v.value, null)])),
-    attachment_count: atts.find((a) => a.card_id === r.id)?.n || 0,
-    comment_count: comments.find((c) => c.card_id === r.id)?.n || 0,
+    labels: (labels.get(r.id) || []).map((l) => l.label_id),
+    members: (members.get(r.id) || []).map((m) => m.user_id),
+    fields: Object.fromEntries((values.get(r.id) || []).map((v) => [v.field_id, parseJSON(v.value, null)])),
+    attachment_count: atts.get(r.id)?.[0].n || 0,
+    comment_count: comments.get(r.id)?.[0].n || 0,
   }));
 }
 
@@ -398,5 +411,5 @@ function httpError(status, message) {
 
 module.exports = {
   FIELD_TYPES, fieldDefs, normalizeValue, displayValue, logActivity, createCard, moveCard, updateCard, deleteCard,
-  serializeCards, cardDetail, httpError, boardColumns, applyCycle, parseJSON, loadRules, sortColumn, checklistProgress, SORT_LABELS,
+  serializeCards, groupedByCard, cardDetail, httpError, boardColumns, applyCycle, parseJSON, loadRules, sortColumn, checklistProgress, SORT_LABELS,
 };

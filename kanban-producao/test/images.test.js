@@ -56,3 +56,22 @@ test('acha links de imagem nas personalizações', () => {
   assert.deepStrictEqual(images.imageUrlsIn({ a: 'veja https://site.com/x.JPG?v=2 ok', b: 'texto', c: 'https://cdn.shopify.com/s/files/1/uploads/abc' }),
     ['https://site.com/x.JPG?v=2', 'https://cdn.shopify.com/s/files/1/uploads/abc']);
 });
+
+test('a mesma foto de produto em vários pedidos é baixada uma vez só e o arquivo só some quando ninguém mais usa', async () => {
+  const { createCard, deleteCard } = require('../server/cards');
+  const col = q.get('SELECT id FROM columns ORDER BY position LIMIT 1').id;
+  let downloads = 0;
+  global.fetch = async () => { downloads++; return { ok: true, status: 200, headers: new Headers({ 'content-type': 'image/png' }), arrayBuffer: async () => PNG }; };
+  const url = 'https://cdn.shopify.com/s/files/1/0001/products/aster.jpg';
+  const a = createCard({ columnId: col, title: 'Pedido A' }, 1);
+  const b = createCard({ columnId: col, title: 'Pedido B' }, 1);
+  assert.strictEqual(await images.attachRemoteImages(a, [url]), 1);
+  assert.strictEqual(await images.attachRemoteImages(b, [url]), 1);
+  assert.strictEqual(downloads, 1, 'segundo pedido reaproveita o arquivo');
+  const [fa, fb] = [a, b].map((id) => q.get('SELECT filename FROM attachments WHERE card_id = ?', id).filename);
+  assert.strictEqual(fa, fb);
+  assert.ok(q.get('SELECT cover_attachment_id FROM cards WHERE id = ?', b).cover_attachment_id, 'vira capa do segundo card também');
+  // apagar um card não apaga a foto do outro
+  for (const f of deleteCard(a, 1)) if (!q.get('SELECT 1 FROM attachments WHERE filename = ?', f)) fs.rmSync(path.join(UPLOAD_DIR, f), { force: true });
+  assert.ok(fs.existsSync(path.join(UPLOAD_DIR, fb)));
+});
