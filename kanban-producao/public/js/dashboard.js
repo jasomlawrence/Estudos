@@ -193,7 +193,7 @@ function kpiGrid(d) {
   h('span', { class: 'kpi-label' }, icon(iconName, 15), label),
   h('strong', { class: 'kpi-value' }, value),
   h('span', { class: 'kpi-sub muted' }, sub));
-  const goTo = (mode, group) => () => { dash.mode = mode; dash.group = group; render(); $('.orders-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  const goTo = (mode, group) => () => { dash.mode = mode; dash.group = group; redrawOrders(); $('.orders-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
   return h('div', { class: 'kpi-grid' },
     tile('play', 'Em produção', String(k.producing), 'cronômetro rodando'),
     tile('pause', 'Em espera', String(k.waiting), 'ainda não entraram na produção'),
@@ -343,6 +343,22 @@ function relative(iso) {
   return days > 0 ? `em ${days} dias` : `há ${-days} dias`;
 }
 
+/**
+ * Troca só a tabela de pedidos (aba Hoje/Semana/Mês ou Prazo/Entrada/Conclusão), sem redesenhar o painel inteiro:
+ * antes a página toda era refeita e "pulava" para outra posição.
+ */
+function redrawOrders() {
+  const old = $('.orders-card');
+  if (!old) return render();
+  const root = $('#dashboard');
+  const scroll = root.scrollTop;
+  // Mantém a maior altura já mostrada: com uma lista mais curta a página não encolhe nem "pula"
+  const next = ordersCard(dash.data);
+  next.style.minHeight = `${Math.max(old.offsetHeight, parseFloat(old.style.minHeight) || 0)}px`;
+  old.replaceWith(next);
+  root.scrollTop = scroll;
+}
+
 function ordersCard(d) {
   const [, , dateKey] = MODES.find(([k]) => k === dash.mode);
   const p = periods();
@@ -367,10 +383,10 @@ function ordersCard(d) {
   return h('section', { class: 'dash-card orders-card' },
     h('header', { class: 'orders-head' },
       h('div', {}, h('h3', {}, 'Pedidos por período'), h('p', { class: 'muted small' }, 'Clique em um pedido para abrir o card.')),
-      h('div', { class: 'segmented' }, MODES.map(([k, l]) => h('button', { class: dash.mode === k ? 'active' : '', onclick: () => { dash.mode = k; render(); } }, l)))),
+      h('div', { class: 'segmented' }, MODES.map(([k, l]) => h('button', { class: dash.mode === k ? 'active' : '', onclick: () => { dash.mode = k; redrawOrders(); } }, l)))),
     h('div', { class: 'period-tabs', role: 'tablist' }, tabs.map(([k, l]) => h('button', {
       role: 'tab', class: `${dash.group === k ? 'active' : ''}${k === 'late' && counts.late ? ' late' : ''}`, 'aria-selected': String(dash.group === k),
-      onclick: () => { dash.group = k; render(); },
+      onclick: () => { dash.group = k; redrawOrders(); },
     }, l, h('span', { class: 'count' }, String(counts[k]))))),
     list.length ? h('div', { class: 'status-summary' }, Object.values(byStatus).map((st) => h('span', { class: 'status-pill', style: { '--st': st.color } }, icon(st.icon, 13), `${st.n} ${st.label.toLowerCase()}`))) : null,
     list.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'orders-table' },

@@ -236,9 +236,16 @@ if (!db.prepare("SELECT 1 FROM settings WHERE key = 'migration:pastel'").get()) 
   db.exec('COMMIT');
 }
 
+// Uma transação pode chamar outra (ex.: duplicar card chama criar card): a de dentro roda dentro da de fora
+let txDepth = 0;
 function transaction(fn) {
   return (...args) => {
-    db.exec('BEGIN');
+    if (txDepth > 0) {
+      txDepth++;
+      try { return fn(...args); } finally { txDepth--; }
+    }
+    txDepth = 1;
+    try { db.exec('BEGIN'); } catch (err) { txDepth = 0; throw err; }
     try {
       const result = fn(...args);
       db.exec('COMMIT');
@@ -246,6 +253,8 @@ function transaction(fn) {
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
+    } finally {
+      txDepth = 0;
     }
   };
 }

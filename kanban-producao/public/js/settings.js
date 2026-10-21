@@ -40,11 +40,22 @@ const PANELS = {
     const name = h('input', { value: state.board.name });
     let bg = state.board.background;
     const boards = await get('/boards');
+    // Por quanto tempo um card recém-chegado aparece como "Novo" (guardado em horas)
+    const hours = Number(state.newHours ?? 24);
+    const inDays = hours >= 24 && hours % 24 === 0;
+    const newAmount = h('input', { type: 'number', min: 0, max: 1440, value: inDays ? hours / 24 : hours, style: { width: '90px' } });
+    const newUnit = h('select', {}, [['h', 'horas'], ['d', 'dias']].map(([v, l]) => h('option', { value: v, selected: (v === 'd') === inDays }, l)));
+    const newHours = () => Math.round(Number(newAmount.value || 0) * (newUnit.value === 'd' ? 24 : 1));
     clear(panel,
       h('h3', {}, 'Quadro atual'),
       h('label', { class: 'form-row' }, 'Nome', name),
       h('div', { class: 'form-row' }, 'Fundo do quadro', backgroundPicker(bg, (b) => { bg = b; document.documentElement.style.setProperty('--board-bg', backgroundCss(b)); })),
-      h('button', { class: 'btn primary', onclick: () => attempt(() => patch(`/boards/${state.boardId}`, { name: name.value, background: bg }), 'Quadro salvo') }, 'Salvar'),
+      h('div', { class: 'form-row' }, 'Sinalizar cards novos por',
+        h('div', {}, h('div', { class: 'row' }, newAmount, newUnit),
+          h('small', { class: 'muted' }, 'Card que acabou de entrar (ex.: pedido novo do Shopify) ganha o selo "✦ Novo" e a coluna mostra quantos novos tem. O selo some quando passa esse tempo ou quando o card é movido para outra coluna. 0 = desligado.'))),
+      h('button', { class: 'btn primary', onclick: async () => {
+        if (await attempt(() => patch(`/boards/${state.boardId}`, { name: name.value, background: bg, new_hours: newHours() }), 'Quadro salvo')) loadBoard();
+      } }, 'Salvar'),
       isAdmin() ? [
         h('h3', {}, 'Outros quadros'),
         h('ul', { class: 'simple-list' }, boards.map((b) => h('li', {}, b.name, b.id === state.boardId ? h('span', { class: 'chip' }, 'atual') : null,

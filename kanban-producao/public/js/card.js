@@ -19,8 +19,14 @@ export async function openCard(id) {
   state.openCardId = id;
   history.replaceState(null, '', `#card=${id}`);
   m.el.addEventListener('paste', onPaste);
+  // O que está sendo digitado (ainda não salvo) é marcado para não se perder quando a janela se redesenha
+  m.el.addEventListener('input', (e) => { if (e.target.dataset?.key) e.target.dataset.dirty = '1'; });
+  m.el.addEventListener('change', (e) => { if (e.target.dataset?.key) delete e.target.dataset.dirty; });
   render();
 }
+
+let pendingSaves = 0;
+const hasUnsavedTyping = () => !!current?.modal.el.querySelector('[data-dirty]');
 
 /** Atualiza a janela se outra pessoa alterou o card (sem atrapalhar quem está digitando) */
 /** Bloco de comentários do card aberto (o tempo real atualiza quando alguém comenta) */
@@ -30,15 +36,31 @@ export async function refreshOpenCard(cardIds = []) {
   if (!current || (cardIds.length && !cardIds.includes(current.card.id))) return;
   const active = document.activeElement;
   if (active && current.modal.el.contains(active) && /INPUT|TEXTAREA|SELECT/.test(active.tagName)) return;
+  if (pendingSaves || hasUnsavedTyping()) return;
   const card = await get(`/cards/${current.card.id}`).catch(() => null);
   if (!card) { current.modal.close(); return; }
   current.card = card;
   render();
 }
 
+/**
+ * Salva uma alteração do card. Com vários campos preenchidos em sequência, a janela só se redesenha
+ * quando o último salvamento termina (antes, a resposta do primeiro apagava o que já estava sendo digitado no próximo).
+ */
 async function save(patchBody) {
-  const card = await attempt(() => patch(`/cards/${current.card.id}`, patchBody));
-  if (card && current) { current.card = card; render(); reloadSoon(); }
+  const cardId = current.card.id;
+  pendingSaves++;
+  let card;
+  try {
+    card = await attempt(() => patch(`/cards/${cardId}`, patchBody));
+  } finally {
+    pendingSaves--;
+  }
+  if (card && current?.card.id === cardId) {
+    current.card = card;
+    if (!pendingSaves) render();
+    reloadSoon();
+  }
   return card;
 }
 
@@ -46,6 +68,10 @@ function render() {
   const { card, modal: m } = current;
   const scroll = m.body.scrollTop;
   const focusKey = document.activeElement?.dataset?.key;
+  // Campos com texto digitado e ainda não salvo: o valor e a posição do cursor voltam depois de redesenhar
+  const typing = [...m.body.querySelectorAll('[data-key][data-dirty]')].map((el) => ({
+    key: el.dataset.key, value: el.value, checked: el.checked, start: el.selectionStart ?? null, end: el.selectionEnd ?? null,
+  }));
   const editable = canEdit();
   const col = state.columns.find((c) => c.id === card.column_id);
   $('.modal-head h2', m.el).textContent = '';
@@ -97,8 +123,19 @@ function render() {
 
   clear(m.body, body);
   autosize(title);
+  for (const t of typing) {
+    const el = m.body.querySelector(`[data-key="${t.key}"]`);
+    if (!el) continue;
+    if (el.type === 'checkbox') el.checked = t.checked; else el.value = t.value;
+    el.dataset.dirty = '1';
+  }
   m.body.scrollTop = scroll;
-  if (focusKey) m.body.querySelector(`[data-key="${focusKey}"]`)?.focus();
+  if (focusKey) {
+    const el = m.body.querySelector(`[data-key="${focusKey}"]`);
+    el?.focus();
+    const t = typing.find((x) => x.key === focusKey);
+    if (el && t && t.start !== null) { try { el.setSelectionRange(t.start, t.end); } catch { /* campo sem cursor (data, número) */ } }
+  }
 }
 
 function autosize(el) {
@@ -373,6 +410,36 @@ function productionSection(card) {
 const stat = (label, value, cls = '') => h('div', { class: `stat ${cls}` }, h('small', {}, label), h('strong', {}, value));
 
 // ---------- Ações ----------
+/** Duplicar: escolhe o título, a coluna e o que copiar; a cópia abre em seguida */
+function duplicateDialog(card) {
+  const m = modal({ title: 'Duplicar card' });
+  const title = h('input', { value: `Cópia de ${card.title}`, maxLength: 500 });
+  const column = h('select', {}, state.columns.map((c) => h('option', { value: c.id, selected: c.id === card.column_id }, c.name)));
+  const parts = [
+    ['fields', 'Campos (cliente, aro, metal, pedra…)', true], ['description', 'Descrição', true], ['labels', 'Etiquetas', true],
+    ['members', 'Responsáveis', true], ['attachments', 'Anexos e capa (fotos)', true], ['due_date', 'Prazo de entrega', false], ['color', 'Cor do card', true],
+  ].map(([key, label, on]) => ({ key, box: h('input', { type: 'checkbox', checked: on }), label }));
+  m.body.append(
+    h('label', { class: 'stack' }, 'Título da cópia', title),
+    h('label', { class: 'stack' }, 'Colocar na coluna', column),
+    h('fieldset', {}, h('legend', {}, 'O que copiar'), parts.map((p) => h('label', { class: 'check' }, p.box, ` ${p.label}`))),
+    h('p', { class: 'muted small' }, 'Comentários, histórico e o vínculo com o pedido do Shopify não são copiados.'),
+    h('div', { class: 'row end' },
+      h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'),
+      h('button', { class: 'btn primary', onclick: async (e) => {
+        e.currentTarget.disabled = true;
+        const copy = await attempt(() => post(`/cards/${card.id}/duplicate`, {
+          title: title.value, columnId: Number(column.value), include: parts.filter((p) => p.box.checked).map((p) => p.key),
+        }), 'Card duplicado');
+        if (!copy) { e.currentTarget.disabled = false; return; }
+        m.close();
+        reloadSoon();
+        openCard(copy.id);
+      } }, 'Duplicar')));
+  title.focus();
+  title.select();
+}
+
 /** Abre as imagens do card no lightbox, começando pela clicada */
 function showImages(card, attachmentId) {
   const list = card.attachments.filter((a) => a.is_image);
@@ -395,6 +462,7 @@ function sidebar(card, editable, col) {
       if (r) { toast(`Aviso enviado: ${r.channels.join(', ') || 'nenhum canal ativo'}`, 'ok'); current.card = await get(`/cards/${card.id}`); render(); }
     } }, icon('bell'), 'Enviar aviso de prazo agora') : null,
     h('button', { class: 'btn block', onclick: () => openPrint([card.id]) }, icon('printer'), 'Imprimir etiqueta'),
+    editable ? h('button', { class: 'btn block', onclick: () => duplicateDialog(card) }, icon('copy'), 'Duplicar card') : null,
     h('button', { class: 'btn block', onclick: () => { copyText(`${location.origin}/#card=${card.id}`); toast('Link copiado', 'ok'); } }, icon('link'), 'Copiar link do card'),
     editable ? h('button', { class: 'btn block', onclick: () => save({ archived: !card.archived }) }, card.archived ? [icon('restore'), 'Restaurar card'] : [icon('archive'), 'Arquivar card']) : null,
     editable ? h('button', { class: 'btn block danger', onclick: async () => {

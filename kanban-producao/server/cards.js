@@ -1,6 +1,6 @@
 'use strict';
 // Regras de negócio de cards: criação, movimentação, edição, histórico
-const { q, transaction, now } = require('./db');
+const { q, transaction, now, getSetting } = require('./db');
 const { bus, boardChanged } = require('./events');
 const { computeCycle, columnDurations } = require('./cycle');
 const rules = require('./rules');
@@ -377,6 +377,44 @@ const sortColumn = transaction((columnId, { by = 'due_date', dir = 'asc' } = {},
   return rows.length;
 });
 
+/**
+ * Duplica um card aproveitando as informações escolhidas (campos, descrição, etiquetas, responsáveis, anexos, prazo, cor).
+ * A cópia fica logo abaixo do original (ou no fim da coluna escolhida). Os arquivos dos anexos são compartilhados, não copiados.
+ */
+const DUP_PARTS = ['fields', 'description', 'labels', 'members', 'attachments', 'due_date', 'color'];
+const duplicateCard = transaction((cardId, { title, columnId, include = DUP_PARTS } = {}, userId = null) => {
+  const src = q.get('SELECT * FROM cards WHERE id = ?', cardId);
+  if (!src) throw httpError(404, 'Card não encontrado.');
+  const [data] = serializeCards([src]);
+  const inc = new Set(include);
+  const column = q.get('SELECT * FROM columns WHERE id = ? AND board_id = ?', Number(columnId) || src.column_id, src.board_id);
+  if (!column) throw httpError(400, 'Coluna inválida.');
+  const id = createCard({
+    columnId: column.id,
+    title: String(title || '').trim() || `Cópia de ${src.title}`,
+    description: inc.has('description') ? src.description : '',
+    color: inc.has('color') ? src.color : null,
+    dueDate: inc.has('due_date') ? src.due_date : null,
+    fields: inc.has('fields') ? data.fields : {},
+    labels: inc.has('labels') ? data.labels : [],
+    shipping: inc.has('fields') ? { zip: src.shipping_zip, promised: src.promised_date, days: src.correios_days, service: src.correios_service } : {},
+  }, userId);
+  if (inc.has('members')) for (const u of data.members) q.run('INSERT OR IGNORE INTO card_members (card_id, user_id) VALUES (?, ?)', id, u);
+  if (inc.has('attachments')) {
+    for (const a of q.all('SELECT * FROM attachments WHERE card_id = ? ORDER BY id', src.id)) {
+      const info = q.run(`INSERT INTO attachments (card_id, filename, original_name, mime, size, uploaded_by, created_at, source_url)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, id, a.filename, a.original_name, a.mime, a.size, userId, now(), a.source_url);
+      if (a.id === src.cover_attachment_id) q.run('UPDATE cards SET cover_attachment_id = ? WHERE id = ?', Number(info.lastInsertRowid), id);
+    }
+  }
+  if (column.id === src.column_id) {
+    const next = q.get('SELECT id FROM cards WHERE column_id = ? AND position > ? AND id != ? ORDER BY position LIMIT 1', column.id, src.position, id);
+    q.run('UPDATE cards SET position = ? WHERE id = ?', positionBetween(column.id, src.id, next?.id, id), id);
+  }
+  logActivity(src.board_id, id, userId, 'card.duplicated', { from: src.title, fromId: src.id });
+  return id;
+});
+
 function deleteCard(cardId, userId) {
   const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
   if (!card) throw httpError(404, 'Card não encontrado.');
@@ -407,6 +445,12 @@ function loadRules(boardId) {
 }
 
 /** Dados resumidos de vários cards, para exibir no quadro. */
+/** Preferências do quadro: por quantas horas um card recém-chegado fica sinalizado como "novo" (0 = desligado) */
+function boardPrefs(boardId) {
+  return { new_hours: 24, ...getSetting(`board_prefs:${boardId}`, {}) };
+}
+const newCutoff = (boardId) => { const h = Number(boardPrefs(boardId).new_hours) || 0; return h > 0 ? new Date(Date.now() - h * 36e5).toISOString() : null; };
+
 /** Busca em lotes (o SQLite limita a quantidade de "?" por consulta) e agrupa as linhas por card */
 function groupedByCard(sql, ids) {
   const map = new Map();
@@ -430,6 +474,11 @@ function serializeCards(rows) {
   const atts = groupedByCard('SELECT card_id, COUNT(*) AS n FROM attachments WHERE card_id IN (%IDS%) GROUP BY card_id', ids);
   const comments = groupedByCard('SELECT card_id, COUNT(*) AS n FROM comments WHERE card_id IN (%IDS%) GROUP BY card_id', ids);
   const covers = groupedByCard('SELECT a.id, a.filename, a.card_id FROM attachments a JOIN cards c ON c.cover_attachment_id = a.id WHERE c.id IN (%IDS%)', ids);
+  // "Novo": chegou dentro do prazo configurado e ainda não saiu da coluna onde entrou
+  const cutoffs = new Map([...new Set(rows.map((r) => r.board_id))].map((b) => [b, newCutoff(b)]));
+  const recent = rows.filter((r) => cutoffs.get(r.board_id) && r.created_at >= cutoffs.get(r.board_id)).map((r) => r.id);
+  const moves = recent.length ? groupedByCard('SELECT card_id, COUNT(*) AS n FROM card_movements WHERE card_id IN (%IDS%) GROUP BY card_id', recent) : new Map();
+  const isNew = new Set(recent.filter((id) => (moves.get(id)?.[0].n || 0) <= 1));
   // Regras de destaque visual ("sempre"), por quadro
   const visual = {};
   for (const boardId of new Set(rows.map((r) => r.board_id))) {
@@ -469,6 +518,7 @@ function serializeCards(rows) {
     fields: Object.fromEntries((values.get(r.id) || []).map((v) => [v.field_id, parseJSON(v.value, null)])),
     attachment_count: atts.get(r.id)?.[0].n || 0,
     comment_count: comments.get(r.id)?.[0].n || 0,
+    is_new: isNew.has(r.id),
   }));
 }
 
@@ -502,5 +552,5 @@ function httpError(status, message) {
 
 module.exports = {
   FIELD_TYPES, fieldDefs, normalizeValue, displayValue, logActivity, createCard, moveCard, updateCard, deleteCard,
-  serializeCards, groupedByCard, cardDetail, httpError, changeFieldType, convertFieldValue, boardColumns, applyCycle, parseJSON, loadRules, sortColumn, checklistProgress, SORT_LABELS,
+  serializeCards, groupedByCard, cardDetail, duplicateCard, boardPrefs, DUP_PARTS, httpError, changeFieldType, convertFieldValue, boardColumns, applyCycle, parseJSON, loadRules, sortColumn, checklistProgress, SORT_LABELS,
 };
