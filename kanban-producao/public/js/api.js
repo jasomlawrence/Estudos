@@ -65,7 +65,7 @@ export function confirmDialog(message, { ok = 'Confirmar', danger = true } = {})
     let done = false;
     const m = modal({ title: 'Confirmação', onClose: () => { if (!done) resolve(false); } });
     m.body.append(
-      h('p', {}, message),
+      h('p', { style: { whiteSpace: 'pre-line' } }, message),
       h('div', { class: 'row end' },
         h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'),
         h('button', { class: `btn ${danger ? 'danger' : 'primary'}`, onclick: () => { done = true; resolve(true); m.close(); } }, ok)),

@@ -1,5 +1,5 @@
 // Configurações → Automações: regras "Quando… Se… Então…" do quadro
-import { h, clear, PALETTE, icon } from './util.js';
+import { h, clear, PALETTE, icon, colorPicker } from './util.js';
 import { get, post, put, del, attempt, confirmDialog, toast } from './api.js';
 import { state } from './state.js';
 import { sortChoices, SORT_DIRS } from './board.js';
@@ -20,7 +20,7 @@ const CONDITIONS = [
 const ACTIONS = [
   ['notify', 'Avisar pessoas (sininho, navegador e e-mail)'], ['webhook', 'Enviar para webhook (WhatsApp via Zapier/Make, Slack…)'],
   ['add_label', 'Adicionar etiqueta'], ['remove_label', 'Remover etiqueta'], ['add_member', 'Adicionar responsável'],
-  ['set_color', 'Mudar a cor do card'], ['move', 'Mover para a coluna'], ['sort', 'Ordenar a coluna do card'],
+  ['set_color', 'Mudar a cor do card (fica gravada)'], ['move', 'Mover para a coluna'], ['sort', 'Ordenar a coluna do card'],
 ];
 const OPS = {
   text: [['contains', 'contém'], ['equals', 'é igual a'], ['not_equals', 'é diferente de']],
@@ -29,6 +29,7 @@ const OPS = {
   select: [['equals', 'é'], ['not_equals', 'não é']],
   checkbox: [['equals', 'é']],
 };
+const VISUAL_ACTIONS = [['highlight', 'Cor da borda (+ aviso)'], ['paint', 'Cor do card']];
 const CHECKLIST_OPS = [['complete', 'está todo marcado'], ['incomplete', 'tem itens sem marcar'], ['filled', 'tem algum item marcado'], ['empty', 'não tem nada marcado']];
 const noValueOps = new Set(['filled', 'empty', 'complete', 'incomplete']);
 const opsFor = (def) => (def?.type === 'checklist' ? CHECKLIST_OPS : [...(OPS[{ textarea: 'text', url: 'text', email: 'text', phone: 'text', currency: 'number', datetime: 'date', multiselect: 'select' }[def?.type] || def?.type] || OPS.text),
@@ -65,12 +66,13 @@ function summary(rule) {
   });
   const then = rule.actions.map((a) => ({
     highlight: `borda ${a.text ? `+ aviso "${a.text}"` : 'colorida'}`,
+    paint: 'pintar o card',
+    set_color: a.color ? 'mudar a cor' : 'tirar a cor',
     notify: `avisar ${a.to === 'users' ? a.users.map((id) => name(state.users, id)).join(', ') || 'pessoas' : { members: 'responsáveis', all: 'todos', admins: 'administradores' }[a.to]}`,
     webhook: 'webhook',
     add_label: `etiqueta "${state.labels.find((l) => l.id === a.label)?.name || '?'}"`,
     remove_label: `tirar etiqueta "${state.labels.find((l) => l.id === a.label)?.name || '?'}"`,
     add_member: `responsável ${name(state.users, a.user)}`,
-    set_color: 'mudar cor',
     move: `mover para ${name(state.columns, a.column)}`,
     sort: `ordenar a coluna por ${(sortChoices().find(([v]) => v === a.by)?.[1] || 'prazo').replace('Campo: ', '').toLowerCase()}`,
   })[a.type]);
@@ -161,25 +163,29 @@ function actionRow(a, visual, onremove, redraw) {
     params.push(sel(sortChoices(), a.by, (v) => { a.by = v; }), sel(SORT_DIRS, a.dir, (v) => { a.dir = v; }));
   }
   if (a.type === 'move') { a.column ??= state.columns[0]?.id; params.push(sel(state.columns.map((c) => [c.id, c.name]), a.column, (v) => { a.column = Number(v); })); }
-  if (a.type === 'set_color') {
-    a.color ??= PALETTE[0];
-    const sw = h('div', { class: 'row wrap' }, PALETTE.slice(0, 12).map((c) => h('button', { type: 'button', class: `swatch${a.color === c ? ' on' : ''}`, style: { background: c }, onclick: (e) => {
-      a.color = c; for (const b of sw.children) b.classList.remove('on'); e.currentTarget.classList.add('on');
-    } })));
-    params.push(sw);
+  if (a.type === 'set_color' || a.type === 'paint') {
+    if (a.type === 'paint') a.color ??= PALETTE[0];
+    else if (!('color' in a)) a.color = PALETTE[0];
+    const preview = h('span', { class: 'color-preview', style: { background: a.color || 'transparent' } }, a.color ? '' : 'sem cor');
+    params.push(h('div', { class: 'grow stack' },
+      h('div', { class: 'row' }, preview, h('small', { class: 'muted' }, a.type === 'paint'
+        ? 'O card fica com esta cor enquanto atender às condições e volta à cor dele quando deixar de atender.'
+        : 'A cor fica gravada no card (pode ser trocada depois à mão).')),
+      colorPicker(a.color, (c) => { a.color = c || null; preview.style.background = c || 'transparent'; preview.textContent = c ? '' : 'sem cor'; }, { allowNone: a.type === 'set_color' })));
   }
   return h('div', { class: 'rule-line' },
-    visual ? h('span', { class: 'rule-tag' }, 'Cor da borda') : sel(ACTIONS, a.type, (v) => { for (const k of Object.keys(a)) delete a[k]; a.type = v; redraw(); }),
+    sel(visual ? VISUAL_ACTIONS : ACTIONS, a.type, (v) => { for (const k of Object.keys(a)) delete a[k]; a.type = v; redraw(); }),
     ...params,
-    visual ? null : h('button', { type: 'button', class: 'icon-btn', title: 'Remover ação', onclick: onremove }, icon('x', 14)));
+    h('button', { type: 'button', class: 'icon-btn', title: 'Remover ação', onclick: onremove }, icon('x', 14)));
 }
 
 function editor(rule, onsaved, oncancel) {
   const box = h('div', { class: 'rule-editor' });
   const draw = () => {
     const visual = rule.trigger.type === 'always';
-    if (visual) rule.actions = [rule.actions.find((a) => a.type === 'highlight') || { type: 'highlight' }];
-    else rule.actions = rule.actions.filter((a) => a.type !== 'highlight');
+    const isVisual = (a) => ['highlight', 'paint'].includes(a.type);
+    rule.actions = rule.actions.filter((a) => (visual ? isVisual(a) : !isVisual(a)));
+    if (visual && !rule.actions.length) rule.actions.push({ type: 'highlight' });
     const t = rule.trigger;
     clear(box,
       h('label', { class: 'form-row' }, 'Nome da automação', h('input', { value: rule.name || '', placeholder: 'Ex.: Avisar ourives quando chegar na Fundição', oninput: (e) => { rule.name = e.target.value; } })),
@@ -188,14 +194,17 @@ function editor(rule, onsaved, oncancel) {
         t.type === 'moved' ? h('div', { class: 'stack' }, h('small', { class: 'muted' }, 'Para a coluna (nenhuma marcada = qualquer):'), chips(state.columns, t.columns, (v) => { t.columns = v; }, { color: (c) => c.color })) : null,
         t.type === 'label_added' ? h('div', { class: 'stack' }, h('small', { class: 'muted' }, 'Etiqueta (nenhuma marcada = qualquer):'), chips(state.labels, t.labels, (v) => { t.labels = v; }, { color: (l) => l.color })) : null,
         t.type === 'field_changed' ? sel([['', 'Qualquer campo'], ...state.fields.map((f) => [f.id, f.name])], t.field, (v) => { t.field = Number(v) || null; }) : null,
-        t.type === 'always' ? h('p', { class: 'muted small' }, 'A borda aparece enquanto o card atender às condições e some sozinha quando deixar de atender. Condições de prazo são reavaliadas a cada minuto.') : null,
+        t.type === 'always' ? h('p', { class: 'muted small' }, 'A borda e/ou a cor do card valem enquanto o card atender às condições e somem sozinhas quando deixar de atender. Condições de prazo são reavaliadas a cada minuto.') : null,
         t.type === 'match' ? h('p', { class: 'muted small' }, 'Executa uma vez quando o card entra na condição (verificado a cada alteração e a cada 10 minutos). Se sair e voltar, executa de novo.') : null),
       h('div', { class: 'rule-block' }, h('div', { class: 'rule-step' }, 'Se', h('small', { class: 'muted' }, rule.trigger.type === 'match' || visual ? ' (pelo menos uma)' : ' (opcional)')),
         rule.conditions.map((c, i) => conditionRow(c, () => { rule.conditions.splice(i, 1); draw(); }, draw)),
         h('button', { type: 'button', class: 'btn small', onclick: () => { rule.conditions.push({ type: visual ? 'due_within' : 'has_label', days: 2 }); draw(); } }, '+ Condição')),
       h('div', { class: 'rule-block' }, h('div', { class: 'rule-step' }, 'Então'),
         rule.actions.map((a, i) => actionRow(a, visual, () => { rule.actions.splice(i, 1); draw(); }, draw)),
-        visual ? null : h('button', { type: 'button', class: 'btn small', onclick: () => { rule.actions.push({ type: 'notify' }); draw(); } }, '+ Ação')),
+        h('button', { type: 'button', class: 'btn small', onclick: () => {
+          rule.actions.push(visual ? { type: rule.actions.some((a) => a.type === 'paint') ? 'highlight' : 'paint' } : { type: 'notify' });
+          draw();
+        } }, '+ Ação')),
       h('p', { class: 'muted small' }, 'Na mensagem: {titulo}, {coluna}, {prazo}, {usuario} (quem mexeu), {link} e {campo:Nome do campo}.'),
       h('div', { class: 'row' },
         h('button', { class: 'btn primary', onclick: async () => {
@@ -214,6 +223,7 @@ const label = (n) => state.labels.find((l) => (l.name || '').toLowerCase().inclu
 const TEMPLATES = [
   ['Borda laranja: prazo em até 3 dias', () => ({ name: 'Prazo chegando', trigger: { type: 'always' }, conditions: [{ type: 'due_within', days: 3 }], actions: [{ type: 'highlight', color: '#ff8a3d', text: 'Prazo próximo' }] })],
   ['Borda vermelha: prazo vencido', () => ({ name: 'Atrasado', trigger: { type: 'always' }, conditions: [{ type: 'overdue' }], actions: [{ type: 'highlight', color: '#ff4d6d', text: 'Atrasado' }] })],
+  ['Card vermelho com etiqueta "Urgente"', () => ({ name: 'Urgente em vermelho', trigger: { type: 'always' }, conditions: [{ type: 'has_label', label: label('urgente') ?? state.labels[0]?.id }], actions: [{ type: 'paint', color: '#ffd6e0' }] })],
   ['Borda com etiqueta "Urgente"', () => ({ name: 'Urgente', trigger: { type: 'always' }, conditions: [{ type: 'has_label', label: label('urgente') ?? state.labels[0]?.id }], actions: [{ type: 'highlight', color: '#8b5cf6' }] })],
   ['Avisar ao mover para uma coluna', () => ({ name: 'Card chegou na etapa', trigger: { type: 'moved', columns: [state.columns[2]?.id].filter(Boolean) }, conditions: [], actions: [{ type: 'notify', to: 'users', users: [], message: '{titulo} chegou em {coluna}' }] })],
   ['Ordenar a coluna quando um card entrar', () => ({ name: 'Manter coluna ordenada por prazo', trigger: { type: 'moved', columns: [state.columns[0]?.id].filter(Boolean) }, conditions: [], actions: [{ type: 'sort', by: 'due_date', dir: 'asc' }] })],
@@ -246,11 +256,13 @@ export async function automationsPanel(panel) {
     editArea,
     list.length ? h('ul', { class: 'rule-list' }, list.map((r, i) => {
       const ring = r.actions.find((a) => a.type === 'highlight');
+      const paint = r.actions.find((a) => a.type === 'paint');
       return h('li', { class: `rule-item${r.enabled ? '' : ' off'}` },
         h('label', { class: 'switch', title: r.enabled ? 'Ativa' : 'Desligada' }, h('input', { type: 'checkbox', checked: r.enabled, onchange: async (e) => {
           if (await attempt(() => put(`/automations/${r.id}`, { ...r, enabled: e.target.checked }), e.target.checked ? 'Automação ligada' : 'Automação desligada')) redraw();
         } }), h('span', {})),
-        ring ? h('span', { class: 'rule-ring', style: { '--c': ring.color }, title: 'Cor da borda' }) : h('span', { class: 'rule-icon' }, icon('bell', 15)),
+        ring || paint ? h('span', { class: 'rule-ring', style: { '--c': ring?.color || 'transparent', background: paint?.color || 'var(--surface)' }, title: [ring && 'Cor da borda', paint && 'Cor do card'].filter(Boolean).join(' + ') })
+          : h('span', { class: 'rule-icon' }, icon('bell', 15)),
         h('div', { class: 'grow' }, h('strong', {}, r.name), h('div', { class: 'small muted' }, summary(r)),
           r.run_count ? h('div', { class: 'small muted' }, `Executada ${r.run_count} vez(es)${r.last_run_at ? `, a última em ${new Date(r.last_run_at).toLocaleString('pt-BR')}` : ''}`) : null),
         h('button', { class: 'icon-btn', title: 'Subir', disabled: i === 0, onclick: () => move(i, -1) }, '↑'),

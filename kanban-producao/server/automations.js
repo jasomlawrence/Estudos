@@ -10,7 +10,8 @@ const notifications = require('./notifications');
 const rules = require('./rules');
 
 const TRIGGERS = ['always', 'match', 'created', 'moved', 'label_added', 'field_changed'];
-const ACTIONS = ['highlight', 'notify', 'webhook', 'add_label', 'remove_label', 'add_member', 'set_color', 'move', 'sort'];
+const VISUAL = ['highlight', 'paint']; // ações das regras "sempre" (calculadas na hora, não gravam nada)
+const ACTIONS = ['highlight', 'paint', 'notify', 'webhook', 'add_label', 'remove_label', 'add_member', 'set_color', 'move', 'sort'];
 const CONDITIONS = ['due_within', 'overdue', 'no_due', 'done', 'not_done', 'has_label', 'not_label', 'in_column', 'not_in_column', 'no_members', 'source', 'field'];
 
 const ids = (list) => (Array.isArray(list) ? list.map(Number).filter(Number.isInteger) : []);
@@ -35,10 +36,11 @@ function sanitize(input) {
 
   const visual = trigger.type === 'always';
   const actions = (Array.isArray(input.actions) ? input.actions : [])
-    .filter((a) => ACTIONS.includes(a?.type) && (visual ? a.type === 'highlight' : a.type !== 'highlight'))
+    .filter((a) => ACTIONS.includes(a?.type) && (visual ? VISUAL.includes(a.type) : !VISUAL.includes(a.type)))
     .map((a) => {
       switch (a.type) {
         case 'highlight': return { type: 'highlight', color: color(a.color) || '#ff6b6b', text: String(a.text || '').slice(0, 40) };
+        case 'paint': return color(a.color) ? { type: 'paint', color: color(a.color) } : null;
         case 'notify': return {
           type: 'notify', to: ['members', 'all', 'users', 'admins'].includes(a.to) ? a.to : 'members', users: ids(a.users),
           message: String(a.message || '').slice(0, 1000), email: !!a.email,
@@ -46,7 +48,7 @@ function sanitize(input) {
         case 'webhook': return { type: 'webhook', url: /^https?:\/\//.test(a.url || '') ? String(a.url) : '', message: String(a.message || '').slice(0, 1000) };
         case 'add_label': case 'remove_label': return { type: a.type, label: Number(a.label) };
         case 'add_member': return { type: a.type, user: Number(a.user) };
-        case 'set_color': return { type: a.type, color: color(a.color) };
+        case 'set_color': return { type: a.type, color: color(a.color) }; // null = tira a cor
         case 'move': return { type: a.type, column: Number(a.column) };
         case 'sort': return { type: a.type, by: /^(due_date|created_at|updated_at|title|field:\d+)$/.test(a.by || '') ? a.by : 'due_date', dir: a.dir === 'desc' ? 'desc' : 'asc' };
         default: return null;

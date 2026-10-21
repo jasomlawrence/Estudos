@@ -35,6 +35,7 @@ export function describe(a, { withCard = false } = {}) {
     case 'label.deleted': return `excluiu a etiqueta ${q(d.label)}`;
     case 'field.created': return `criou o campo ${q(d.name)}`;
     case 'field.renamed': return `renomeou o campo ${q(d.from)} para ${q(d.to)}`;
+    case 'field.type_changed': return `mudou o tipo do campo ${q(d.name)} (${d.converted} valor(es) convertido(s)${d.lost ? `, ${d.lost} apagado(s)` : ''})`;
     case 'field.deleted': return `excluiu o campo ${q(d.name)}`;
     case 'board.created': return `criou o quadro ${q(d.name)}`;
     case 'board.cycle': return `definiu o cronômetro de produção: de ${q(d.start)} até ${q(d.end)}`;
