@@ -11,7 +11,7 @@ import { openActivity } from './activity.js';
 import { loadCalendar } from './calendar.js';
 import { loadDashboard } from './dashboard.js';
 import { setSelecting } from './selection.js';
-import { openStock } from './stock.js';
+import { initStock, loadStock, stockSection } from './stock.js';
 
 async function start() {
   const me = await get('/auth/me');
@@ -92,18 +92,23 @@ function renderShell() {
     $('#board').hidden = view !== 'board';
     $('#calendar').hidden = view !== 'calendar';
     $('#dashboard').hidden = view !== 'dashboard';
+    $('#stock').hidden = view !== 'stock';
     selectBtn.hidden = view !== 'board';
     if (view !== 'board' && state.selecting) setSelecting(false);
-    search.hidden = view === 'dashboard';
+    search.hidden = view === 'dashboard' || view === 'stock';
     for (const b of viewSwitch.children) b.classList.toggle('active', b.dataset.view === view);
     if (view === 'calendar' && state.board) loadCalendar();
     if (view === 'dashboard' && state.board) loadDashboard();
+    if (view === 'stock') loadStock();
     if (view === 'board' && state.boardStale) loadBoard();
   };
   const viewSwitch = h('div', { class: 'view-switch', role: 'tablist' },
     h('button', { dataset: { view: 'board' }, title: 'Quadro', onclick: () => setView('board') }, icon('kanban', 16), h('span', { class: 'lbl' }, 'Quadro')),
     h('button', { dataset: { view: 'calendar' }, title: 'Calendário', onclick: () => setView('calendar') }, icon('calendar', 16), h('span', { class: 'lbl' }, 'Calendário')),
-    h('button', { dataset: { view: 'dashboard' }, title: 'Painel de produção', onclick: () => setView('dashboard') }, icon('gauge', 16), h('span', { class: 'lbl' }, 'Painel')));
+    h('button', { dataset: { view: 'dashboard' }, title: 'Painel de produção', onclick: () => setView('dashboard') }, icon('gauge', 16), h('span', { class: 'lbl' }, 'Painel')),
+    h('button', { dataset: { view: 'stock' }, title: 'Estoque de pedras', onclick: () => setView('stock') }, icon('gem', 16), h('span', { class: 'lbl' }, 'Estoque')));
+  state.setView = setView;
+  initStock(openCard);
   const chatBtn = h('button', { class: 'top-btn bell', title: 'Conversa da equipe', onclick: () => openChat() }, icon('chat', 17), h('span', { class: 'badge-count', id: 'chat-count', hidden: true }));
   const bell = h('button', { class: 'top-btn bell', title: 'Notificações', onclick: (e) => openNotifications(e.currentTarget) }, icon('bell', 17), h('span', { class: 'badge-count', id: 'notif-count', hidden: true }));
   const userBtn = h('button', { class: 'top-btn user', onclick: (e) => {
@@ -124,7 +129,6 @@ function renderShell() {
       search,
       h('div', { class: 'top-actions' },
         selectBtn,
-        topBtn('gem', 'Estoque', 'Estoque de pedras', () => openStock(openCard)),
         topBtn('clock', 'Produção', 'Tempo de produção', () => openMetrics(openCard)),
         topBtn('history', 'Atividade', 'Histórico de alterações', () => openActivity(openCard)),
         archivedBtn,
@@ -132,11 +136,12 @@ function renderShell() {
         chatBtn, bell, userBtn)),
     h('main', { id: 'board', class: 'board' }),
     h('main', { id: 'calendar', class: 'calendar', hidden: true }),
-    h('main', { id: 'dashboard', class: 'dashboard', hidden: true }));
+    h('main', { id: 'dashboard', class: 'dashboard', hidden: true }),
+    h('main', { id: 'stock', class: 'dashboard stock-view', hidden: true }));
   enableDragScroll($('#board'));
   let saved = 'board';
   try { saved = localStorage.getItem('view') || 'board'; } catch { /* navegação privada */ }
-  setView(['calendar', 'dashboard'].includes(saved) ? saved : 'board');
+  setView(['calendar', 'dashboard', 'stock'].includes(saved) ? saved : 'board');
 }
 
 // ---------------- Tempo real (Server-Sent Events) ----------------
@@ -181,7 +186,7 @@ async function openNotifications(anchor) {
     h('div', { class: 'menu-title' }, 'Notificações'),
     'Notification' in window && Notification.permission === 'default'
       ? h('button', { class: 'btn small block', onclick: () => Notification.requestPermission() }, 'Ativar notificações do navegador') : null,
-    r?.items.length ? r.items.map((n) => h('button', { class: `notif${n.read ? '' : ' unread'}`, onclick: () => { pop.close(); if (n.card_id) openCard(n.card_id); else if (n.message.startsWith('💬')) openChat(); else if (n.message.startsWith('📉')) openStock(openCard, { section: 'melee' }); } },
+    r?.items.length ? r.items.map((n) => h('button', { class: `notif${n.read ? '' : ' unread'}`, onclick: () => { pop.close(); if (n.card_id) openCard(n.card_id); else if (n.message.startsWith('💬')) openChat(); else if (n.message.startsWith('📉')) { stockSection('melee'); state.setView?.('stock'); } } },
       h('div', {}, n.message.split('\n')[0]), h('small', { class: 'muted' }, timeAgo(n.created_at)))) : h('p', { class: 'muted' }, 'Nenhuma notificação.')), { width: 360 });
   if (r?.unread) { await post('/notifications/read'); refreshNotifications(); }
 }

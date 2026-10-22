@@ -25,119 +25,178 @@ const segmented = (options, current, onPick, cls = '') => h('div', { class: `seg
 /** append que ignora os itens vazios (o append do navegador escreveria "null") */
 const add = (parent, ...kids) => parent.append(...kids.flat().filter((k) => k !== null && k !== undefined && k !== false));
 
-let openCardFn = null; // definido por quem abre o estoque (evita importar card.js aqui)
+let openCardFn = null; // definido pelo main.js (evita importar card.js aqui)
 
-// =============================================================== Tela de Estoque
-export function openStock(openCard, { section } = {}) {
-  if (openCard) openCardFn = openCard;
-  const m = modal({ title: 'Estoque de pedras', wide: true, className: 'stock-modal' });
-  const view = { section: section || pref('stock:section') || 'lab', status: pref('stock:status') || 'available', shape: '', text: '', meleeKind: '' };
-  let info = null;
+// =============================================================== Página de Estoque
+// Uma tela como Quadro/Calendário/Painel: resumo no topo, abas, filtros, tabela e painel de detalhes ao lado
+const page = {
+  section: pref('stock:section') || 'lab', status: pref('stock:status') || 'available', shape: '', text: '', color: '', clarity: '', caratMin: '', caratMax: '',
+  sort: '', dir: 'asc', limit: 100, meleeKind: '', meleeLow: false, movesType: '', movesKind: '', movesDays: '30', movesText: '', selected: null,
+};
+let info = null;
+const isMobile = () => matchMedia('(max-width: 760px)').matches;
+const root = () => document.getElementById('stock');
 
-  const head = h('div', { class: 'stock-head' });
-  const content = h('div', { class: 'stock-content' });
-  add(m.body, head, content);
+/** Quem abre cards a partir do estoque (main.js passa o openCard) */
+export function initStock(openCard) { openCardFn = openCard; }
+export function stockSection(section) { page.section = section; pref('stock:section', section); }
 
-  async function load() {
-    info = await attempt(() => get('/stock'));
-    if (!info) return;
-    SHAPES = info.shapes;
-    drawHead();
-    drawContent();
-  }
+export async function loadStock() {
+  const el = root();
+  if (!el) return;
+  if (!info) clear(el, h('p', { class: 'muted dash-loading' }, 'Carregando o estoque…'));
+  const data = await get('/stock').catch((err) => { clear(el, h('p', { class: 'error' }, err.message)); return null; });
+  if (!data) return;
+  info = data;
+  SHAPES = info.shapes;
+  render();
+}
 
-  const count = (kind, status) => info.counts.filter((c) => c.kind === kind && (!status || c.status === status)).reduce((n, c) => n + c.n, 0);
+const count = (kind, status) => info.counts.filter((c) => c.kind === kind && (!status || c.status === status)).reduce((n, c) => n + c.n, 0);
+const carats = (kind, status) => info.counts.filter((c) => c.kind === kind && c.status === status).reduce((n, c) => n + (c.ct || 0), 0);
+const fmtTotalCt = (n) => `${n.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ct`;
 
-  function drawHead() {
-    const tabs = segmented([
-      ['lab', `Diamantes lab · ${count('lab', 'available')}`],
-      ['moissanite', `Moissanites · ${count('moissanite', 'available')}`],
-      ['melee', `Pedras pequenas · ${info.melee.length}`],
-    ], view.section, (s) => { view.section = s; view.shape = ''; pref('stock:section', s); drawHead(); drawContent(); }, 'stock-tabs');
-    const actions = h('div', { class: 'row' },
-      canEdit() ? (view.section === 'melee'
-        ? h('button', { class: 'btn primary', onclick: () => meleeForm(null, { onSaved: load }) }, icon('plus', 16), ' Novo item')
-        : h('button', { class: 'btn primary', onclick: () => stoneForm(null, { kind: view.section, onSaved: load }) }, icon('camera', 16), ' Nova pedra')) : null,
-      isAdmin() ? h('button', { class: 'icon-btn square', title: 'Leitura automática dos certificados', onclick: () => aiSettings(info.ai, load) }, icon('settings', 17)) : null);
-    clear(head, tabs, actions);
-  }
+function render() {
+  const el = root();
+  const body = h('div', { class: `stock-body${page.selected ? ' with-panel' : ''}` }, h('div', { class: 'stock-main' }), h('aside', { class: 'stock-panel' }));
+  clear(el, h('div', { class: 'stock-page' },
+    h('div', { class: 'dash-head stock-page-head' },
+      h('div', {}, h('h2', {}, 'Estoque de pedras'), h('p', { class: 'muted small' }, 'Diamantes de laboratório, moissanites e pedras pequenas. A baixa acontece pelos campos de pedra dos cards.')),
+      h('div', { class: 'row wrap stock-page-actions' },
+        h('a', { class: 'btn', href: exportUrl(), download: '', title: 'Baixar planilha (CSV) do que está na tela' }, icon('archive', 15), h('span', { class: 'lbl' }, ' Exportar')),
+        isAdmin() ? h('button', { class: 'btn', title: 'Leitura automática dos certificados', onclick: () => aiSettings(info.ai, loadStock) }, icon('settings', 15), h('span', { class: 'lbl' }, ' Leitura automática')) : null,
+        canEdit() && page.section !== 'moves' ? (page.section === 'melee'
+          ? h('button', { class: 'btn primary', onclick: () => meleeForm(null, { onSaved: (it) => { page.selected = { type: 'melee', id: it.id }; loadStock(); } }) }, icon('plus', 16), ' Novo item')
+          : h('button', { class: 'btn primary', onclick: () => stoneForm(null, { kind: page.section, onSaved: (s) => { page.selected = { type: 'stone', id: s.id }; loadStock(); } }) }, icon('camera', 16), ' Nova pedra')) : null)),
+    kpis(),
+    fieldsHint(),
+    h('div', { class: 'stock-tabs-line' }, segmented([
+      ['lab', 'Diamantes lab'], ['moissanite', 'Moissanites'], ['melee', 'Pedras pequenas'], ['moves', 'Histórico'],
+    ], page.section, (s) => { stockSection(s); resetFilters(); render(); }, 'stock-tabs')),
+    body));
+  const main = body.querySelector('.stock-main');
+  if (page.section === 'melee') drawMelee(main);
+  else if (page.section === 'moves') drawMoves(main);
+  else drawStones(main);
+  if (page.selected) openPanel(page.selected);
+}
 
-  function drawContent() {
-    if (view.section === 'melee') return drawMelee();
-    return drawStones();
-  }
+/** Ao trocar de aba os filtros recomeçam (um "peso a partir de 1 ct" não deve sumir com as moissanites sem aviso) */
+function resetFilters() {
+  Object.assign(page, { shape: '', text: '', color: '', clarity: '', caratMin: '', caratMax: '', sort: '', dir: 'asc', limit: 100, selected: null });
+}
 
-  // ---------- Diamantes lab e moissanites ----------
-  function drawStones() {
-    const kind = view.section;
-    const shapes = new Map();
-    for (const c of info.counts) if (c.kind === kind && (view.status === 'all' || c.status === view.status)) shapes.set(c.shape || 'Sem corte', (shapes.get(c.shape || 'Sem corte') || 0) + c.n);
-    const ordered = [...shapes].sort((a, b) => SHAPES.indexOf(a[0]) - SHAPES.indexOf(b[0]));
-    const search = h('label', { class: 'search stock-search' }, icon('search', 15),
-      h('input', { type: 'search', placeholder: 'Código, pedido ou observação', value: view.text, oninput: debounce((e) => { view.text = e.target.value; drawList(); }, 250) }));
-    const filters = h('div', { class: 'stock-filters' },
-      search,
-      segmented([['available', 'Disponíveis'], ['used', 'Usadas'], ['all', 'Todas']], view.status, (s) => { view.status = s; pref('stock:status', s); drawContent(); }, 'small'));
-    const shapeChips = h('div', { class: 'stock-shapes' },
-      h('button', { class: `chip toggle${view.shape ? '' : ' on'}`, onclick: () => { view.shape = ''; drawContent(); } }, `Todos · ${[...shapes.values()].reduce((a, b) => a + b, 0)}`),
-      ordered.map(([shape, n]) => h('button', { class: `chip toggle${view.shape === shape ? ' on' : ''}`, onclick: () => { view.shape = shape; drawContent(); } }, `${shape} · ${n}`)));
-    const list = h('div', { class: 'stone-list' }, h('p', { class: 'muted' }, 'Carregando…'));
-    clear(content, boardFieldsHint(), filters, shapeChips, list);
+function kpis() {
+  const s = info.summary;
+  const tile = (iconName, label, value, sub, section, status) => h('button', {
+    type: 'button', class: `kpi clickable${page.section === section ? ' active' : ''}`, style: status ? { '--st': status } : {},
+    onclick: () => { stockSection(section); resetFilters(); render(); },
+  }, h('span', { class: 'kpi-label' }, icon(iconName, 15), label), h('strong', { class: 'kpi-value' }, value), h('span', { class: 'kpi-sub muted' }, sub));
+  return h('div', { class: 'kpi-grid stock-kpis' },
+    tile('gem', 'Diamantes lab disponíveis', String(count('lab', 'available')), `${fmtTotalCt(carats('lab', 'available'))} · ${count('lab', 'used')} já usados`, 'lab'),
+    tile('gem', 'Moissanites disponíveis', String(count('moissanite', 'available')), `${fmtTotalCt(carats('moissanite', 'available'))} · ${count('moissanite', 'used')} já usadas`, 'moissanite'),
+    tile('box', 'Pedras pequenas', `${s.melee.units} un.`, s.melee.low ? `${s.melee.low} item(ns) com estoque baixo` : `${s.melee.items} formato(s) e tamanho(s)`, 'melee', s.melee.low ? '#e0466f' : null),
+    tile('history', 'Baixas em 30 dias', String(Math.max(0, s.used_30d)), `pedras com código · ${Math.max(0, s.melee_out_30d)} pedras pequenas`, 'moves'));
+}
 
-    async function drawList() {
-      const params = new URLSearchParams({ kind, status: view.status === 'all' ? '' : view.status, shape: view.shape === 'Sem corte' ? '' : view.shape, q: view.text });
-      const rows = await attempt(() => get(`/stones?${params}`));
-      if (!rows) return;
-      if (!rows.length) {
-        clear(list, h('div', { class: 'stock-empty' }, h('p', {}, view.text ? 'Nenhuma pedra encontrada.' : view.status === 'used' ? 'Nenhuma pedra usada ainda.' : 'Nenhuma pedra disponível aqui.'),
-          canEdit() && !view.text && view.status !== 'used' ? h('p', { class: 'muted small' }, 'Toque em "Nova pedra" e fotografe o certificado (ou a etiqueta da moissanite): os campos são preenchidos sozinhos.') : null));
-        return;
+// Dica: o quadro precisa dos campos de pedra para dar baixa pelos cards
+function fieldsHint() {
+  const missing = [['stone', 'Pedra central', 'Pedra do estoque'], ['melee', 'Pedras laterais', 'Pedras pequenas']].filter(([type]) => !state.fields.some((f) => f.type === type));
+  if (!state.boardId || !missing.length) return null;
+  return h('div', { class: 'callout stock-hint' },
+    h('span', {}, `Para dar baixa pelos cards, o quadro precisa ${missing.length > 1 ? 'dos campos' : 'do campo'} ${missing.map(([, , t]) => `"${t}"`).join(' e ')}.`),
+    canEdit() ? h('div', { class: 'row wrap' }, missing.map(([type, name]) => h('button', { class: 'btn small primary', onclick: async () => {
+      if (await attempt(() => post(`/boards/${state.boardId}/fields`, { name, type, show_on_card: true }), `Campo "${name}" criado no quadro`)) {
+        const board = await get(`/boards/${state.boardId}?limit=10`).catch(() => null);
+        if (board) state.fields = board.fields;
+        render();
       }
-      clear(list, rows.map((s) => stoneRow(s, () => stoneDetail(s.id, { onChange: load }))));
+    } }, `Criar "${name}"`))) : null);
+}
+
+function stoneParams(extra = {}) {
+  const p = {
+    kind: page.section, status: page.status === 'all' ? '' : page.status, shape: page.shape, q: page.text, color: page.color, clarity: page.clarity,
+    carat_min: page.caratMin, carat_max: page.caratMax, sort: page.sort, dir: page.dir, ...extra,
+  };
+  return new URLSearchParams(Object.entries(p).filter(([, v]) => v !== '' && v !== null && v !== undefined));
+}
+
+function exportUrl() {
+  if (page.section === 'melee') return '/api/stock/export?section=melee';
+  if (page.section === 'moves') return `/api/stock/export?${movesParams({ section: 'moves' })}`;
+  return `/api/stock/export?${stoneParams({ section: page.section })}`;
+}
+
+// ---------- Diamantes lab e moissanites ----------
+function drawStones(main) {
+  const kind = page.section;
+  const shapes = new Map();
+  for (const c of info.counts) if (c.kind === kind && (page.status === 'all' || c.status === page.status)) shapes.set(c.shape || '', (shapes.get(c.shape || '') || 0) + c.n);
+  const ordered = [...shapes].filter(([s]) => s).sort((a, b) => SHAPES.indexOf(a[0]) - SHAPES.indexOf(b[0]));
+  const redraw = () => drawList();
+  const input = (key, attrs) => h('input', { value: page[key], ...attrs, oninput: debounce((e) => { page[key] = e.target.value; page.limit = 100; redraw(); }, 300) });
+  const moreOpen = !!(page.color || page.clarity || page.caratMin || page.caratMax);
+  const filters = h('div', { class: 'stock-filters' },
+    h('label', { class: 'search stock-search' }, icon('search', 15), input('text', { type: 'search', placeholder: 'Código, pedido ou observação' })),
+    segmented([['available', 'Disponíveis'], ['used', 'Usadas'], ['all', 'Todas']], page.status, (s) => { page.status = s; pref('stock:status', s); page.limit = 100; render(); }, 'small'),
+    h('details', { class: 'stock-more-filters', open: moreOpen },
+      h('summary', { class: 'btn small' }, icon('settings', 13), ' Filtros'),
+      h('div', { class: 'stock-filter-grid' },
+        h('label', {}, 'Peso de', input('caratMin', { inputmode: 'decimal', placeholder: 'ct' })),
+        h('label', {}, 'até', input('caratMax', { inputmode: 'decimal', placeholder: 'ct' })),
+        h('label', {}, 'Cor', input('color', { placeholder: 'Ex.: F', autocapitalize: 'characters' })),
+        kind === 'lab' ? h('label', {}, 'Claridade', input('clarity', { placeholder: 'Ex.: VVS2', autocapitalize: 'characters' })) : null,
+        moreOpen ? h('button', { class: 'btn small subtle', onclick: () => { Object.assign(page, { color: '', clarity: '', caratMin: '', caratMax: '' }); render(); } }, 'Limpar') : null)));
+  const chips = h('div', { class: 'stock-shapes' },
+    h('button', { class: `chip toggle${page.shape ? '' : ' on'}`, onclick: () => { page.shape = ''; page.limit = 100; render(); } }, `Todos os cortes · ${[...shapes.values()].reduce((a, b) => a + b, 0)}`),
+    ordered.map(([shape, n]) => h('button', { class: `chip toggle${page.shape === shape ? ' on' : ''}`, onclick: () => { page.shape = shape; page.limit = 100; render(); } }, `${shape} · ${n}`)));
+  const list = h('div', { class: 'stock-list' }, h('p', { class: 'muted' }, 'Carregando…'));
+  add(main, filters, chips, list);
+
+  async function drawList() {
+    const r = await attempt(() => get(`/stock/stones?${stoneParams({ limit: page.limit })}`));
+    if (!r) return;
+    if (!r.rows.length) {
+      clear(list, h('div', { class: 'stock-empty' }, h('p', {}, page.text || moreOpen ? 'Nenhuma pedra com esses filtros.' : page.status === 'used' ? 'Nenhuma pedra usada ainda.' : 'Nenhuma pedra disponível aqui.'),
+        canEdit() && !page.text && page.status !== 'used' ? h('p', { class: 'muted small' }, 'Toque em "Nova pedra" e fotografe o certificado (ou a etiqueta da moissanite).') : null));
+      return;
     }
-    drawList();
+    const foot = h('div', { class: 'stock-foot muted small' },
+      `${r.rows.length} de ${r.total.n} pedra(s)${r.total.ct ? ` · ${fmtTotalCt(r.total.ct)} no total` : ''}`,
+      r.rows.length < r.total.n ? h('button', { class: 'btn small', onclick: () => { page.limit += 200; drawList(); } }, 'Mostrar mais') : null);
+    clear(list, isMobile() ? h('div', { class: 'stone-list' }, r.rows.map((s) => stoneRow(s, () => select({ type: 'stone', id: s.id })))) : stonesTable(r.rows, kind), foot);
   }
+  drawList();
+}
 
-  // ---------- Pedras pequenas ----------
-  function drawMelee() {
-    const filters = h('div', { class: 'stock-filters' },
-      h('label', { class: 'search stock-search' }, icon('search', 15),
-        h('input', { type: 'search', placeholder: 'Formato ou tamanho', value: view.text, oninput: debounce((e) => { view.text = e.target.value; drawList(); }, 200) })),
-      segmented([['', 'Todas'], ['lab', 'Lab'], ['moissanite', 'Moissanite']], view.meleeKind, (k) => { view.meleeKind = k; drawContent(); }, 'small'));
-    const list = h('div', { class: 'melee-list' });
-    clear(content, boardFieldsHint(), filters, list);
-    function drawList() {
-      const t = view.text.trim().toLowerCase().replace(',', '.');
-      const rows = info.melee.filter((m) => (!view.meleeKind || m.kind === view.meleeKind)
-        && (!t || `${m.shape} ${m.size}`.toLowerCase().replace(/,/g, '.').includes(t)));
-      if (!rows.length) {
-        clear(list, h('div', { class: 'stock-empty' }, h('p', {}, info.melee.length ? 'Nada encontrado.' : 'Nenhuma pedra pequena cadastrada.'),
-          canEdit() && !info.melee.length ? h('p', { class: 'muted small' }, 'Cadastre cada combinação de formato e tamanho (ex.: Redonda 1,5 mm) com a quantidade que você tem. A baixa acontece pelo campo "Pedras pequenas" do card.') : null));
-        return;
-      }
-      clear(list, rows.map((item) => meleeRow(item, load)));
-    }
-    drawList();
-  }
+function sortHeader(key, label, cls = '') {
+  const active = page.sort === key;
+  return h('th', { class: `${cls}${key ? ' sortable' : ''}${active ? ' sorted' : ''}`, onclick: key ? () => {
+    page.dir = active && page.dir === 'asc' ? 'desc' : 'asc';
+    page.sort = key;
+    render();
+  } : undefined }, label, active ? h('span', { class: 'sort-arrow' }, page.dir === 'asc' ? ' ▲' : ' ▼') : null);
+}
 
-  // Dica: o quadro precisa dos campos de pedra para dar baixa pelos cards
-  function boardFieldsHint() {
-    const type = view.section === 'melee' ? 'melee' : 'stone';
-    if (!state.boardId || state.fields.some((f) => f.type === type)) return null;
-    const name = type === 'melee' ? 'Pedras laterais' : 'Pedra central';
-    return h('div', { class: 'callout stock-hint' },
-      h('span', {}, `Para dar baixa pelos cards, crie no quadro um campo do tipo "${type === 'melee' ? 'Pedras pequenas' : 'Pedra do estoque'}".`),
-      canEdit() ? h('button', { class: 'btn small primary', onclick: async () => {
-        if (await attempt(() => post(`/boards/${state.boardId}/fields`, { name, type, show_on_card: true }), `Campo "${name}" criado no quadro`)) {
-          const board = await get(`/boards/${state.boardId}?limit=10`).catch(() => null);
-          if (board) state.fields = board.fields;
-          drawContent();
-        }
-      } }, `Criar "${name}"`) : null);
-  }
-
-  load();
-  return m;
+function stonesTable(rows, kind) {
+  const lab = kind === 'lab';
+  return h('div', { class: 'table-wrap' }, h('table', { class: 'stock-table' },
+    h('thead', {}, h('tr', {},
+      h('th', { class: 'col-photo' }), sortHeader('code', 'Código'), sortHeader('shape', 'Corte'), sortHeader('carat', 'Peso', 'num'), sortHeader('measurements', 'Dimensões (mm)'),
+      sortHeader('color', 'Cor'), lab ? sortHeader('clarity', 'Claridade') : null, lab ? h('th', {}, 'Lap. · Pol. · Sim.') : null,
+      sortHeader('status', 'Situação'), sortHeader('used_at', 'Pedido'))),
+    h('tbody', {}, rows.map((s) => h('tr', {
+      class: `clickable${s.status === 'used' ? ' used' : ''}${page.selected?.type === 'stone' && page.selected.id === s.id ? ' selected' : ''}`,
+      onclick: () => select({ type: 'stone', id: s.id }),
+    },
+    h('td', { class: 'col-photo' }, s.photo_url ? h('img', { class: 'stone-thumb', src: s.photo_url, alt: '', loading: 'lazy' }) : h('span', { class: 'stone-thumb empty' }, icon('gem', 16))),
+    h('td', {}, h('strong', {}, s.code)), h('td', {}, s.shape || '—'), h('td', { class: 'num' }, fmtCt(s.carat) || '—'), h('td', {}, s.measurements || '—'),
+    h('td', {}, s.color ? h('span', { class: 'grade' }, s.color) : '—'),
+    lab ? h('td', {}, s.clarity ? h('span', { class: 'grade' }, s.clarity) : '—') : null,
+    lab ? h('td', { class: 'small muted' }, [s.cut_grade, s.polish, s.symmetry].map((g) => (g ? g.replace(/^Excellent$/i, 'EX').replace(/^Very Good$/i, 'VG').replace(/^Good$/i, 'G') : '–')).join(' · ')) : null,
+    h('td', {}, s.status === 'used' ? h('span', { class: 'chip late' }, 'Usada') : h('span', { class: 'chip ok' }, 'Disponível')),
+    h('td', { class: 'col-order' }, s.status === 'used' ? h('span', { title: s.used_order }, s.used_order || '(sem pedido)', h('div', { class: 'small muted' }, fmtDateTime(s.used_at))) : ''))))));
 }
 
 function stoneRow(s, onclick) {
@@ -149,6 +208,143 @@ function stoneRow(s, onclick) {
     s.status === 'used'
       ? h('span', { class: 'chip late stone-status', title: s.used_order }, `Usada · ${s.used_order || 'sem pedido'}`)
       : h('span', { class: 'chip ok stone-status' }, 'Disponível'));
+}
+
+// ---------- Pedras pequenas ----------
+function drawMelee(main) {
+  const filters = h('div', { class: 'stock-filters' },
+    h('label', { class: 'search stock-search' }, icon('search', 15),
+      h('input', { type: 'search', placeholder: 'Formato ou tamanho', value: page.text, oninput: debounce((e) => { page.text = e.target.value; drawList(); }, 200) })),
+    segmented([['', 'Todas'], ['lab', 'Lab'], ['moissanite', 'Moissanite']], page.meleeKind, (k) => { page.meleeKind = k; render(); }, 'small'),
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: page.meleeLow, onchange: (e) => { page.meleeLow = e.target.checked; drawList(); } }), ' Só estoque baixo ou zerado'));
+  const list = h('div', { class: 'stock-list' });
+  add(main, filters, list);
+  function drawList() {
+    const t = page.text.trim().toLowerCase().replace(',', '.');
+    const rows = info.melee.filter((m) => (!page.meleeKind || m.kind === page.meleeKind)
+      && (!page.meleeLow || m.qty === 0 || (m.min_qty > 0 && m.qty <= m.min_qty))
+      && (!t || `${m.shape} ${m.size}`.toLowerCase().replace(/,/g, '.').includes(t)));
+    if (!rows.length) {
+      clear(list, h('div', { class: 'stock-empty' }, h('p', {}, info.melee.length ? 'Nada encontrado.' : 'Nenhuma pedra pequena cadastrada.'),
+        canEdit() && !info.melee.length ? h('p', { class: 'muted small' }, 'Cadastre cada combinação de formato e tamanho (ex.: Redonda 1,5 mm) com a quantidade que você tem. A baixa acontece pelo campo "Pedras pequenas" do card.') : null));
+      return;
+    }
+    const units = rows.reduce((n, m) => n + m.qty, 0);
+    if (isMobile()) {
+      clear(list, h('div', { class: 'melee-list' }, rows.map((item) => meleeCard(item))), h('div', { class: 'stock-foot muted small' }, `${rows.length} item(ns) · ${units} un.`));
+      return;
+    }
+    clear(list, h('div', { class: 'table-wrap' }, h('table', { class: 'stock-table melee-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Formato'), h('th', {}, 'Tamanho'), h('th', {}, 'Tipo'), h('th', { class: 'num' }, 'Quantidade'), h('th', { class: 'num hide-mobile' }, 'Mínimo'), h('th', {}, ''))),
+      h('tbody', {}, rows.map((item) => {
+        const low = item.min_qty > 0 && item.qty <= item.min_qty;
+        return h('tr', { class: `clickable${page.selected?.type === 'melee' && page.selected.id === item.id ? ' selected' : ''}${item.qty ? '' : ' empty'}`, onclick: () => select({ type: 'melee', id: item.id }) },
+          h('td', {}, h('strong', {}, item.shape)), h('td', {}, item.size),
+          h('td', {}, h('span', { class: `chip kind-${item.kind}` }, KIND_SHORT[item.kind])),
+          h('td', { class: 'num' }, h('strong', { class: 'melee-qty-cell' }, String(item.qty)), ' un.', low ? h('span', { class: 'chip late low-chip', title: `Mínimo: ${item.min_qty}` }, 'baixo') : null),
+          h('td', { class: 'num muted hide-mobile' }, item.min_qty ? String(item.min_qty) : '—'),
+          h('td', { class: 'melee-actions-cell' }, canEdit() ? h('div', { class: 'melee-actions' },
+            h('button', { class: 'icon-btn square', title: 'Saída', onclick: (e) => { e.stopPropagation(); meleeMove(e.currentTarget, item, -1, loadStock); } }, icon('minus', 16)),
+            h('button', { class: 'icon-btn square', title: 'Entrada (compra)', onclick: (e) => { e.stopPropagation(); meleeMove(e.currentTarget, item, 1, loadStock); } }, icon('plus', 16))) : null));
+      })))),
+    h('div', { class: 'stock-foot muted small' }, `${rows.length} item(ns) · ${units} un.`));
+  }
+  drawList();
+}
+
+function meleeCard(item) {
+  const low = item.min_qty > 0 && item.qty <= item.min_qty;
+  return h('div', { class: `melee-row${low ? ' low' : ''}${item.qty ? '' : ' empty'}` },
+    h('button', { class: 'melee-main', onclick: () => select({ type: 'melee', id: item.id }) },
+      h('strong', {}, `${item.shape} ${item.size}`),
+      h('span', { class: `chip kind-${item.kind}` }, KIND_SHORT[item.kind]),
+      low ? h('span', { class: 'chip late', title: `Mínimo: ${item.min_qty}` }, 'baixo') : null),
+    h('span', { class: 'melee-qty' }, h('strong', {}, String(item.qty)), h('small', {}, 'un.')),
+    canEdit() ? h('div', { class: 'melee-actions' },
+      h('button', { class: 'icon-btn square', title: 'Saída', onclick: (e) => meleeMove(e.currentTarget, item, -1, loadStock) }, icon('minus', 16)),
+      h('button', { class: 'icon-btn square', title: 'Entrada (compra)', onclick: (e) => meleeMove(e.currentTarget, item, 1, loadStock) }, icon('plus', 16))) : null);
+}
+
+// ---------- Movimentações ----------
+function movesParams(extra = {}) {
+  const days = Number(page.movesDays);
+  const p = { type: page.movesType, kind: page.movesKind, q: page.movesText, from: days ? new Date(Date.now() - days * 864e5).toISOString() : '', ...extra };
+  return new URLSearchParams(Object.entries(p).filter(([, v]) => v !== ''));
+}
+
+const MOVE_LABEL = { created: ['Cadastro', ''], edited: ['Edição', ''], used: ['Baixa', 'late'], returned: ['Devolução', 'ok'], in: ['Entrada', 'ok'], out: ['Saída', 'late'] };
+
+function drawMoves(main) {
+  const filters = h('div', { class: 'stock-filters' },
+    h('label', { class: 'search stock-search' }, icon('search', 15),
+      h('input', { type: 'search', placeholder: 'Pedra, pedido ou motivo', value: page.movesText, oninput: debounce((e) => { page.movesText = e.target.value; drawList(); }, 300) })),
+    segmented([['7', '7 dias'], ['30', '30 dias'], ['90', '90 dias'], ['0', 'Tudo']], page.movesDays, (d) => { page.movesDays = d; render(); }, 'small'),
+    segmented([['', 'Todas'], ['stone', 'Com código'], ['melee', 'Pequenas']], page.movesType, (t) => { page.movesType = t; render(); }, 'small'));
+  const list = h('div', { class: 'stock-list' }, h('p', { class: 'muted' }, 'Carregando…'));
+  add(main, filters, list);
+  async function drawList() {
+    const rows = await attempt(() => get(`/stock/movements?${movesParams()}`));
+    if (!rows) return;
+    if (!rows.length) { clear(list, h('div', { class: 'stock-empty' }, h('p', {}, 'Nenhuma movimentação nesse período.'))); return; }
+    const foot = h('div', { class: 'stock-foot muted small' }, `${rows.length} movimentação(ões)${rows.length >= 300 ? ' (as 300 mais recentes; exporte para ver todas)' : ''}`);
+    const orderLink = (m) => (m.card_id && openCardFn
+      ? h('a', { href: '#', onclick: (e) => { e.preventDefault(); e.stopPropagation(); openCardFn(m.card_id); } }, m.order_ref || 'abrir card') : m.order_ref || '');
+    const qtyText = (m) => (m.delta ? `${m.delta > 0 ? '+' : '−'}${Math.abs(m.delta)} un.` : '');
+    if (isMobile()) {
+      clear(list, h('div', { class: 'move-list' }, rows.map((m) => {
+        const [label, cls] = MOVE_LABEL[m.action] || [m.action, ''];
+        return h('div', { class: 'move-row', onclick: () => select({ type: m.type, id: m.ref_id }) },
+          h('div', { class: 'move-line' }, h('strong', {}, m.item), h('span', { class: `chip ${cls}` }, label), m.delta ? h('strong', { class: 'move-qty' }, qtyText(m)) : null),
+          m.order_ref || m.detail ? h('div', { class: 'small' }, orderLink(m), m.detail && m.detail !== m.order_ref ? h('span', { class: 'muted' }, `${m.order_ref ? ' · ' : ''}${m.detail}`) : null) : null,
+          h('div', { class: 'small muted' }, `${fmtDateTime(m.created_at)}${m.user_name ? ` · ${m.user_name}` : ''}${m.qty_after !== null && m.qty_after !== undefined ? ` · saldo ${m.qty_after}` : ''}`));
+      })), foot);
+      return;
+    }
+    clear(list, h('div', { class: 'table-wrap' }, h('table', { class: 'stock-table moves-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Data'), h('th', {}, 'Pedra'), h('th', {}, 'Movimento'), h('th', { class: 'num' }, 'Qtd.'), h('th', {}, 'Pedido / motivo'), h('th', { class: 'hide-mobile' }, 'Quem'))),
+      h('tbody', {}, rows.map((m) => {
+        const [label, cls] = MOVE_LABEL[m.action] || [m.action, ''];
+        return h('tr', { class: 'clickable', onclick: () => select({ type: m.type, id: m.ref_id }) },
+          h('td', { class: 'nowrap small' }, fmtDateTime(m.created_at)),
+          h('td', {}, h('strong', {}, m.item), h('div', { class: 'small muted' }, [KIND_LABEL[m.kind], m.info].filter(Boolean).join(' · '))),
+          h('td', {}, h('span', { class: `chip ${cls}` }, label)),
+          h('td', { class: 'num' }, m.delta ? `${m.delta > 0 ? '+' : '−'}${Math.abs(m.delta)}` : '1', m.qty_after !== null && m.qty_after !== undefined ? h('div', { class: 'small muted' }, `saldo ${m.qty_after}`) : null),
+          h('td', {}, orderLink(m),
+            m.detail && m.detail !== m.order_ref ? h('div', { class: 'small muted' }, m.detail) : null),
+          h('td', { class: 'small muted hide-mobile' }, m.user_name || '—'));
+      })))), foot);
+  }
+  drawList();
+}
+
+// ---------- Painel de detalhes (ao lado no computador, tela cheia no celular) ----------
+function select(sel) {
+  page.selected = sel;
+  const body = root()?.querySelector('.stock-body');
+  body?.classList.add('with-panel');
+  root()?.querySelectorAll('.stock-table tr.selected').forEach((tr) => tr.classList.remove('selected'));
+  openPanel(sel);
+}
+
+function closePanel() {
+  page.selected = null;
+  root()?.querySelector('.stock-body')?.classList.remove('with-panel');
+  root()?.querySelectorAll('.stock-table tr.selected').forEach((tr) => tr.classList.remove('selected'));
+}
+
+async function openPanel(sel) {
+  const panel = root()?.querySelector('.stock-panel');
+  if (!panel) return;
+  clear(panel, h('p', { class: 'muted' }, 'Carregando…'));
+  const onChange = () => loadStock();
+  const content = sel.type === 'melee' ? await meleeDetailContent(sel.id, { onChange, close: closePanel }) : await stoneDetailContent(sel.id, { onChange, close: closePanel });
+  if (page.selected !== sel) return;
+  if (!content) { closePanel(); return; }
+  clear(panel, h('div', { class: 'stock-panel-head' },
+    h('button', { class: 'btn small subtle panel-back', onclick: closePanel }, '← Voltar'),
+    h('h3', {}, content.title),
+    h('button', { class: 'icon-btn', 'aria-label': 'Fechar', onclick: closePanel }, icon('x', 18))),
+  h('div', { class: 'stock-panel-body' }, content.body));
 }
 
 // =============================================================== Cadastro de pedra
@@ -298,11 +494,10 @@ export function stoneForm(stone, { kind = 'lab', onSaved } = {}) {
 }
 
 // =============================================================== Detalhe da pedra
-export async function stoneDetail(id, { onChange } = {}) {
+/** Conteúdo do detalhe (usado no painel da página de Estoque e na janela aberta pelo card) */
+async function stoneDetailContent(id, { onChange, close }) {
   const s = await attempt(() => get(`/stones/${id}`));
-  if (!s) return;
-  const m = modal({ title: s.code, className: 'stone-detail-modal' });
-  const refresh = () => { m.close(); onChange?.(); stoneDetail(id, { onChange }); };
+  if (!s) return null;
   const facts = [
     ['Tipo', KIND_LABEL[s.kind]], ['Corte', s.shape], ['Peso', fmtCt(s.carat)], ['Dimensões', s.measurements ? `${s.measurements} mm` : ''],
     ['Cor', s.color], ['Claridade', s.clarity], ['Lapidação', s.cut_grade], ['Polimento', s.polish], ['Simetria', s.symmetry],
@@ -313,29 +508,42 @@ export async function stoneDetail(id, { onChange } = {}) {
       h('strong', {}, `Usada no pedido ${s.used_order || '(sem pedido)'}`),
       h('div', { class: 'small muted' }, `${fmtDateTime(s.used_at)}${s.used_by_name ? ` · ${s.used_by_name}` : ''}${s.card?.archived ? ' · card arquivado' : s.card ? ` · ${s.card.column_name}` : ''}`),
       h('div', { class: 'row wrap' },
-        s.card && openCardFn ? h('button', { class: 'btn small', onclick: () => { m.close(); document.querySelector('.stock-modal')?.closest('.modal-overlay')?.remove(); openCardFn(s.card.id); } }, 'Abrir card') : null,
+        s.card && openCardFn ? h('button', { class: 'btn small', onclick: () => openCardFn(s.card.id) }, 'Abrir card') : null,
         canEdit() ? h('button', { class: 'btn small subtle', onclick: async () => {
           const msg = s.card ? `Devolver ${s.code} ao estoque?\n\nO campo de pedra do card "${s.card.title}" fica vazio.` : `Devolver ${s.code} ao estoque?`;
-          if (await confirmDialog(msg, { ok: 'Devolver', danger: false }) && await attempt(() => post(`/stones/${s.id}/return`), 'Pedra devolvida ao estoque')) refresh();
+          if (await confirmDialog(msg, { ok: 'Devolver', danger: false }) && await attempt(() => post(`/stones/${s.id}/return`), 'Pedra devolvida ao estoque')) onChange();
         } }, 'Devolver ao estoque') : null))
     : h('div', { class: 'callout stone-available' },
       h('strong', {}, 'Disponível no estoque'),
-      canEdit() ? h('div', { class: 'row wrap' }, h('button', { class: 'btn small subtle', onclick: () => manualUse(s, refresh) }, 'Dar baixa sem card…')) : null);
+      canEdit() ? h('div', { class: 'row wrap' }, h('button', { class: 'btn small subtle', onclick: () => manualUse(s, onChange) }, 'Dar baixa sem card…')) : null);
   const ACTIONS = { created: 'Cadastrada', edited: 'Editada', used: 'Baixa', returned: 'Devolvida ao estoque' };
-  add(m.body, 
-    s.photo_url ? h('img', { class: 'stone-detail-photo', src: s.photo_url, alt: 'Certificado', onclick: () => openLightbox([{ url: s.photo_url, name: s.code }]) }) : null,
-    statusBox,
-    h('dl', { class: 'stone-facts' }, facts.map(([k, val]) => [h('dt', {}, k), h('dd', {}, val)])),
-    s.notes ? h('p', { class: 'stone-notes' }, s.notes) : null,
-    h('h4', {}, 'Histórico'),
-    h('ul', { class: 'stone-history' }, s.history.map((l) => h('li', {},
-      h('strong', {}, ACTIONS[l.action] || l.action), l.order_ref ? ` · ${l.order_ref}` : '', l.detail ? h('span', { class: 'muted' }, ` (${l.detail})`) : null,
-      h('div', { class: 'small muted' }, `${fmtDateTime(l.created_at)}${l.user_name ? ` · ${l.user_name}` : ''}`)))),
-    h('div', { class: 'row end wrap' },
-      isAdmin() && s.status !== 'used' ? h('button', { class: 'btn subtle', onclick: async () => {
-        if (await confirmDialog(`Excluir ${s.code} do estoque? O histórico dela também é apagado.`) && await attempt(() => del(`/stones/${s.id}`), 'Pedra excluída')) { m.close(); onChange?.(); }
-      } }, 'Excluir') : null,
-      canEdit() ? h('button', { class: 'btn primary', onclick: () => { m.close(); stoneForm(s, { onSaved: () => { onChange?.(); stoneDetail(id, { onChange }); } }); } }, 'Editar') : null));
+  return {
+    title: s.code,
+    body: [
+      s.photo_url ? h('img', { class: 'stone-detail-photo', src: s.photo_url, alt: 'Certificado', onclick: () => openLightbox([{ url: s.photo_url, name: s.code }]) }) : null,
+      statusBox,
+      h('dl', { class: 'stone-facts' }, facts.map(([k, val]) => [h('dt', {}, k), h('dd', {}, val)])),
+      s.notes ? h('p', { class: 'stone-notes' }, s.notes) : null,
+      h('div', { class: 'row wrap stone-detail-actions' },
+        canEdit() ? h('button', { class: 'btn primary small', onclick: () => stoneForm(s, { onSaved: onChange }) }, 'Editar') : null,
+        isAdmin() && s.status !== 'used' ? h('button', { class: 'btn subtle small', onclick: async () => {
+          if (await confirmDialog(`Excluir ${s.code} do estoque? O histórico dela também é apagado.`) && await attempt(() => del(`/stones/${s.id}`), 'Pedra excluída')) { close(); onChange(); }
+        } }, 'Excluir') : null),
+      h('h4', {}, 'Histórico'),
+      h('ul', { class: 'stone-history' }, s.history.map((l) => h('li', {},
+        h('strong', {}, ACTIONS[l.action] || l.action), l.order_ref ? ` · ${l.order_ref}` : '', l.detail ? h('span', { class: 'muted' }, ` (${l.detail})`) : null,
+        h('div', { class: 'small muted' }, `${fmtDateTime(l.created_at)}${l.user_name ? ` · ${l.user_name}` : ''}`)))),
+    ],
+  };
+}
+
+/** Detalhe numa janela (aberto pelo botão "Ver" do campo de pedra no card) */
+export async function stoneDetail(id) {
+  let m = null;
+  const content = await stoneDetailContent(id, { onChange: () => { m?.close(); stoneDetail(id); }, close: () => m?.close() });
+  if (!content) return;
+  m = modal({ title: content.title, className: 'stone-detail-modal' });
+  add(m.body, content.body);
 }
 
 function manualUse(s, done) {
@@ -352,19 +560,6 @@ function manualUse(s, done) {
 }
 
 // =============================================================== Pedras pequenas
-function meleeRow(item, reload) {
-  const low = item.min_qty > 0 && item.qty <= item.min_qty;
-  return h('div', { class: `melee-row${low ? ' low' : ''}${item.qty ? '' : ' empty'}` },
-    h('button', { class: 'melee-main', onclick: () => meleeDetail(item.id, reload) },
-      h('strong', {}, `${item.shape} ${item.size}`),
-      h('span', { class: `chip kind-${item.kind}` }, KIND_SHORT[item.kind]),
-      low ? h('span', { class: 'chip late', title: `Mínimo: ${item.min_qty}` }, 'estoque baixo') : null),
-    h('span', { class: 'melee-qty' }, h('strong', {}, String(item.qty)), h('small', {}, 'un.')),
-    canEdit() ? h('div', { class: 'melee-actions' },
-      h('button', { class: 'icon-btn square', title: 'Saída', onclick: (e) => meleeMove(e.currentTarget, item, -1, reload) }, icon('minus', 16)),
-      h('button', { class: 'icon-btn square', title: 'Entrada (compra)', onclick: (e) => meleeMove(e.currentTarget, item, 1, reload) }, icon('plus', 16))) : null);
-}
-
 function meleeMove(anchor, item, sign, reload) {
   const qty = h('input', { type: 'number', min: 1, value: 1, inputmode: 'numeric' });
   const note = h('input', { placeholder: sign > 0 ? 'Fornecedor / nota (opcional)' : 'Pedido ou motivo (obrigatório)' });
@@ -410,24 +605,32 @@ function meleeForm(item, { onSaved } = {}) {
   if (!editing) setTimeout(() => size.focus(), 50);
 }
 
-async function meleeDetail(id, reload) {
+async function meleeDetailContent(id, { onChange, close }) {
   const item = await attempt(() => get(`/melee/${id}`));
-  if (!item) return;
-  const m = modal({ title: item.label, className: 'melee-detail-modal' });
-  add(m.body, 
-    h('div', { class: 'melee-summary' }, h('strong', {}, `${item.qty} un.`), h('span', { class: 'muted' }, item.min_qty ? ` · aviso com ${item.min_qty} un. ou menos` : ' · sem aviso de estoque baixo')),
-    item.notes ? h('p', { class: 'muted' }, item.notes) : null,
-    h('h4', {}, 'Entradas e saídas'),
-    item.history.length ? h('ul', { class: 'stone-history' }, item.history.map((mv) => h('li', {},
-      h('strong', { class: mv.delta > 0 ? 'ok-text' : '' }, `${mv.delta > 0 ? '+' : '−'}${Math.abs(mv.delta)} un.`), ` → ${mv.qty_after} · `,
-      mv.card && openCardFn ? h('a', { href: '#', onclick: (e) => { e.preventDefault(); document.querySelectorAll('.modal-overlay').forEach((o) => o.remove()); openCardFn(mv.card.id); } }, mv.order_ref || mv.card.title) : mv.order_ref || '',
-      mv.note && mv.note !== mv.order_ref ? h('span', { class: 'muted' }, ` (${mv.note})`) : null,
-      h('div', { class: 'small muted' }, `${fmtDateTime(mv.created_at)}${mv.user_name ? ` · ${mv.user_name}` : ''}`)))) : h('p', { class: 'muted' }, 'Nenhuma movimentação ainda.'),
-    h('div', { class: 'row end wrap' },
-      isAdmin() ? h('button', { class: 'btn subtle', onclick: async () => {
-        if (await confirmDialog(`Excluir ${item.label} do estoque?`) && await attempt(() => del(`/melee/${item.id}`), 'Item excluído')) { m.close(); reload(); }
-      } }, 'Excluir') : null,
-      canEdit() ? h('button', { class: 'btn primary', onclick: () => { m.close(); meleeForm(item, { onSaved: reload }); } }, 'Editar') : null));
+  if (!item) return null;
+  const low = item.min_qty > 0 && item.qty <= item.min_qty;
+  return {
+    title: item.label,
+    body: [
+      h('div', { class: `callout melee-summary${low ? ' low' : ''}` },
+        h('div', {}, h('strong', { class: 'melee-summary-qty' }, `${item.qty} un.`), h('span', { class: 'muted' }, item.min_qty ? ` · aviso com ${item.min_qty} un. ou menos` : ' · sem aviso de estoque baixo')),
+        canEdit() ? h('div', { class: 'row wrap' },
+          h('button', { class: 'btn small', onclick: (e) => meleeMove(e.currentTarget, item, 1, onChange) }, icon('plus', 14), ' Entrada'),
+          h('button', { class: 'btn small', onclick: (e) => meleeMove(e.currentTarget, item, -1, onChange) }, icon('minus', 14), ' Saída')) : null),
+      item.notes ? h('p', { class: 'muted' }, item.notes) : null,
+      h('div', { class: 'row wrap stone-detail-actions' },
+        canEdit() ? h('button', { class: 'btn primary small', onclick: () => meleeForm(item, { onSaved: onChange }) }, 'Editar') : null,
+        isAdmin() ? h('button', { class: 'btn subtle small', onclick: async () => {
+          if (await confirmDialog(`Excluir ${item.label} do estoque?`) && await attempt(() => del(`/melee/${item.id}`), 'Item excluído')) { close(); onChange(); }
+        } }, 'Excluir') : null),
+      h('h4', {}, 'Entradas e saídas'),
+      item.history.length ? h('ul', { class: 'stone-history' }, item.history.map((mv) => h('li', {},
+        h('strong', { class: mv.delta > 0 ? 'ok-text' : '' }, `${mv.delta > 0 ? '+' : '−'}${Math.abs(mv.delta)} un.`), ` → ${mv.qty_after} · `,
+        mv.card && openCardFn ? h('a', { href: '#', onclick: (e) => { e.preventDefault(); openCardFn(mv.card.id); } }, mv.order_ref || mv.card.title) : mv.order_ref || '',
+        mv.note && mv.note !== mv.order_ref ? h('span', { class: 'muted' }, ` (${mv.note})`) : null,
+        h('div', { class: 'small muted' }, `${fmtDateTime(mv.created_at)}${mv.user_name ? ` · ${mv.user_name}` : ''}`)))) : h('p', { class: 'muted' }, 'Nenhuma movimentação ainda.'),
+    ],
+  };
 }
 
 // =============================================================== Leitura automática (chave da API)

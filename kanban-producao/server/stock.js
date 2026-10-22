@@ -145,12 +145,19 @@ function findByCode(text) {
   return /^\d{5,}$/.test(n) ? q.all('SELECT * FROM stones WHERE code_digits = ?', n) : [];
 }
 
-function searchStones({ text = '', kind = '', status = '', shape = '', limit = 300 } = {}) {
+/** Filtros da lista de pedras (tela de Estoque e campo do card) */
+function stoneFilter({ text = '', kind = '', status = '', shape = '', color = '', clarity = '', caratMin = '', caratMax = '' } = {}) {
   const where = [];
   const params = [];
   if (KINDS[kind]) { where.push('s.kind = ?'); params.push(kind); }
   if (['available', 'used'].includes(status)) { where.push('s.status = ?'); params.push(status); }
   if (shape) { where.push('s.shape = ?'); params.push(shape); }
+  if (color) { where.push('upper(s.color) = ?'); params.push(String(color).trim().toUpperCase()); }
+  if (clarity) { where.push('upper(s.clarity) = ?'); params.push(String(clarity).replace(/\s+/g, '').toUpperCase()); }
+  const min = parseCarat(caratMin);
+  const max = parseCarat(caratMax);
+  if (min) { where.push('s.carat >= ?'); params.push(min); }
+  if (max) { where.push('s.carat <= ?'); params.push(max); }
   const n = normCode(text);
   if (n) {
     const like = `%${n}%`;
@@ -159,14 +166,62 @@ function searchStones({ text = '', kind = '', status = '', shape = '', limit = 3
     where.push(`(s.code_norm LIKE ? ${d.length >= 3 ? 'OR s.code_digits LIKE ?' : ''} OR upper(s.used_order) LIKE ? OR upper(s.notes) LIKE ?)`);
     params.push(like, ...(d.length >= 3 ? [`%${d}%`] : []), words, words);
   }
-  const sql = `SELECT s.*, u.name AS used_by_name FROM stones s LEFT JOIN users u ON u.id = s.used_by
-               ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY s.status, s.shape, s.carat DESC, s.id DESC LIMIT ?`;
-  return q.all(sql, ...params, Math.min(Number(limit) || 300, 2000));
+  return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
 }
 
-/** Quantas pedras por tipo, situação e corte (para as abas e os contadores) */
+const STONE_SORTS = {
+  code: 's.code_norm', shape: 's.shape', carat: 's.carat', color: 's.color', clarity: 's.clarity',
+  status: 's.status', used_at: 's.used_at', created_at: 's.created_at', measurements: 's.measurements',
+};
+
+function searchStones({ sort = '', dir = 'asc', limit = 300, offset = 0, ...filters } = {}) {
+  const f = stoneFilter(filters);
+  const col = STONE_SORTS[sort];
+  const order = col ? `${col} IS NULL OR ${col} = '', ${col} ${dir === 'desc' ? 'DESC' : 'ASC'}, s.id DESC` : 's.status, s.shape, s.carat DESC, s.id DESC';
+  return q.all(`SELECT s.*, u.name AS used_by_name FROM stones s LEFT JOIN users u ON u.id = s.used_by ${f.sql} ORDER BY ${order} LIMIT ? OFFSET ?`,
+    ...f.params, Math.min(Number(limit) || 300, 2000), Math.max(Number(offset) || 0, 0));
+}
+
+function countStones(filters = {}) {
+  const f = stoneFilter(filters);
+  return q.get(`SELECT COUNT(*) AS n, ROUND(SUM(s.carat), 3) AS ct FROM stones s ${f.sql}`, ...f.params);
+}
+
+/** Quantas pedras (e quantos quilates) por tipo, situação e corte (para as abas e os contadores) */
 function stoneCounts() {
-  return q.all('SELECT kind, status, shape, COUNT(*) AS n FROM stones GROUP BY kind, status, shape');
+  return q.all('SELECT kind, status, shape, COUNT(*) AS n, ROUND(SUM(carat), 3) AS ct FROM stones GROUP BY kind, status, shape');
+}
+
+/** Resumo do topo da tela de Estoque */
+function stockSummary() {
+  const since = new Date(Date.now() - 30 * 864e5).toISOString();
+  const melee = q.get('SELECT COUNT(*) AS items, COALESCE(SUM(qty), 0) AS units, SUM(min_qty > 0 AND qty <= min_qty) AS low, SUM(qty = 0) AS empty FROM melee_items');
+  return {
+    used_30d: q.get("SELECT COUNT(*) AS n FROM stone_log WHERE action = 'used' AND created_at >= ?", since).n
+      - q.get("SELECT COUNT(*) AS n FROM stone_log WHERE action = 'returned' AND created_at >= ?", since).n,
+    melee_out_30d: -(q.get('SELECT COALESCE(SUM(delta), 0) AS n FROM melee_moves WHERE delta < 0 AND created_at >= ?', since).n)
+      - q.get('SELECT COALESCE(SUM(delta), 0) AS n FROM melee_moves WHERE delta > 0 AND card_id IS NOT NULL AND created_at >= ?', since).n,
+    melee: { items: melee.items, units: melee.units, low: melee.low || 0, empty: melee.empty || 0 },
+  };
+}
+
+/** Tudo o que entrou e saiu do estoque (pedras com código e pedras pequenas), do mais recente */
+function movements({ kind = '', type = '', text = '', from = '', to = '', limit = 300 } = {}) {
+  const rows = q.all(`
+    SELECT * FROM (
+      SELECT 'stone' AS type, l.id, l.created_at, l.action, l.order_ref, l.card_id, l.detail, u.name AS user_name,
+             s.kind, s.code AS item, s.id AS ref_id, NULL AS delta, NULL AS qty_after,
+             trim(s.shape || ' ' || COALESCE(replace(CAST(s.carat AS TEXT), '.', ',') || ' ct', '')) AS info
+      FROM stone_log l JOIN stones s ON s.id = l.stone_id LEFT JOIN users u ON u.id = l.user_id
+      UNION ALL
+      SELECT 'melee', m.id, m.created_at, CASE WHEN m.delta > 0 THEN (CASE WHEN m.card_id IS NOT NULL THEN 'returned' ELSE 'in' END) ELSE (CASE WHEN m.card_id IS NOT NULL THEN 'used' ELSE 'out' END) END,
+             m.order_ref, m.card_id, m.note, u.name, i.kind, i.shape || ' ' || i.size, i.id, m.delta, m.qty_after, ''
+      FROM melee_moves m JOIN melee_items i ON i.id = m.item_id LEFT JOIN users u ON u.id = m.user_id
+    ) WHERE (? = '' OR kind = ?) AND (? = '' OR type = ?) AND (? = '' OR created_at >= ?) AND (? = '' OR created_at < ?)
+      AND (? = '' OR upper(item || ' ' || order_ref || ' ' || detail) LIKE ?)
+    ORDER BY created_at DESC, id DESC LIMIT ?`,
+  kind, kind, type, type, from, from, to, to, String(text).trim(), `%${String(text).trim().toUpperCase()}%`, Math.min(Number(limit) || 300, 5000));
+  return rows;
 }
 
 /** Liga a pedra ao card (baixa). Lança erro se ela já estiver em outro pedido. */
@@ -406,7 +461,7 @@ const takeLowStockAlerts = () => {
 
 module.exports = {
   KINDS, SHAPES, STOCK_TYPES, normCode, digitsOf, shapeName, formatMeasurements, formatSize, parseCarat,
-  createStone, updateStone, deleteStone, stoneRow, stoneLabel, findByCode, searchStones, stoneCounts, useStone, returnStone, stoneHistory,
+  createStone, updateStone, deleteStone, stoneRow, stoneLabel, findByCode, searchStones, countStones, stoneCounts, stockSummary, movements, useStone, returnStone, stoneHistory,
   createMelee, updateMelee, moveMelee, deleteMelee, listMelee, meleeRow, meleeLabel, meleeHistory,
   normalizeMeleeValue, applyStoneField, applyMeleeField, releaseCard, releaseField, stockTexts, displayStock, cardStock, takeLowStockAlerts,
 };
