@@ -143,3 +143,22 @@ test('leitura do certificado: resposta do modelo vira campos do formulário', as
   });
   await assert.rejects(certificate.readCertificate(file, 'image/jpeg'), /não está configurada/);
 });
+
+test('página de estoque: filtros, ordenação, total, resumo e movimentações', () => {
+  stock.createStone({ kind: 'lab', code: 'LG100', shape: 'Oval', carat: '0.9', color: 'G', clarity: 'VS1' }, 1);
+  stock.createStone({ kind: 'lab', code: 'LG200', shape: 'Oval', carat: '1.2', color: 'G', clarity: 'VS1' }, 1);
+  const codes = (opts) => stock.searchStones(opts).map((s) => s.code);
+  assert.deepStrictEqual(codes({ kind: 'lab', shape: 'Oval', sort: 'carat', dir: 'asc' }), ['LG100', 'LG200', 'LG797609310']);
+  assert.deepStrictEqual(codes({ kind: 'lab', caratMin: '1', caratMax: '1,3' }), ['LG200']);
+  assert.deepStrictEqual(codes({ kind: 'lab', color: 'g', clarity: 'vs 1', sort: 'code', dir: 'desc' }), ['LG200', 'LG100']);
+  assert.deepStrictEqual(codes({ kind: 'lab', shape: 'Oval', limit: 1, offset: 1, sort: 'carat' }), ['LG200']);
+  assert.deepStrictEqual({ ...stock.countStones({ kind: 'lab', shape: 'Oval' }) }, { n: 3, ct: 3.61 });
+  const sum = stock.stockSummary();
+  assert.ok(sum.melee.items >= 2 && sum.melee.units >= 18);
+  const moves = stock.movements({ limit: 1000 });
+  assert.ok(moves.some((m) => m.type === 'stone' && m.action === 'used' && m.item === 'LG797609310'));
+  assert.ok(moves.some((m) => m.type === 'melee' && m.action === 'in' && m.detail === 'compra'));
+  assert.ok(moves.some((m) => m.type === 'melee' && m.action === 'used'), 'baixa de pedras pequenas pelo card');
+  assert.ok(stock.movements({ type: 'melee', limit: 1000 }).every((m) => m.type === 'melee'));
+  assert.deepStrictEqual(stock.movements({ text: 'LG100' }).map((m) => m.action), ['created']);
+});

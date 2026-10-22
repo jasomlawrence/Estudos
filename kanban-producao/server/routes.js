@@ -1104,6 +1104,7 @@ router.get('/stock', (req, res) => {
     kinds: stock.KINDS,
     shapes: stock.SHAPES,
     counts: stock.stoneCounts(),
+    summary: stock.stockSummary(),
     melee: stock.listMelee(),
     ai: { configured: !!certificate.apiKey(), from_env: !ai.api_key && !!process.env.ANTHROPIC_API_KEY, key: req.user.role === 'admin' ? mask(ai.api_key) : '', model: certificate.MODEL },
   });
@@ -1113,6 +1114,53 @@ router.put('/stock/ai', auth.requireAdmin, (req, res) => {
   const key = String(req.body.api_key ?? '').trim();
   if (!isMasked(key)) setSetting('stock_ai', { ...getSetting('stock_ai', {}), api_key: key });
   res.json({ ok: true, configured: !!certificate.apiKey() });
+});
+
+const stoneQuery = (qs) => ({
+  text: qs.q, kind: qs.kind, status: qs.status, shape: qs.shape, color: qs.color, clarity: qs.clarity, caratMin: qs.carat_min, caratMax: qs.carat_max,
+});
+
+// Lista da tela de Estoque: página de pedras + total (com os mesmos filtros)
+router.get('/stock/stones', (req, res) => {
+  const filters = stoneQuery(req.query);
+  res.json({
+    rows: stock.searchStones({ ...filters, sort: req.query.sort, dir: req.query.dir, limit: req.query.limit || 100, offset: req.query.offset }).map(stoneOut),
+    total: stock.countStones(filters),
+  });
+});
+
+router.get('/stock/movements', (req, res) => {
+  res.json(stock.movements({ kind: req.query.kind, type: req.query.type, text: req.query.q, from: req.query.from, to: req.query.to, limit: req.query.limit }));
+});
+
+// Planilha (CSV, abre no Excel/Google Planilhas) do que está na tela
+router.get('/stock/export', (req, res) => {
+  const section = String(req.query.section || 'lab');
+  const fmtNum = (n) => (n === null || n === undefined ? '' : String(n).replace('.', ','));
+  const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: process.env.TZ || 'America/Sao_Paulo' }) : '');
+  let header;
+  let rows;
+  if (section === 'melee') {
+    header = ['Tipo', 'Formato', 'Tamanho', 'Quantidade', 'Mínimo', 'Observações'];
+    rows = stock.listMelee().map((m) => [stock.KINDS[m.kind], m.shape, m.size, m.qty, m.min_qty || '', m.notes]);
+  } else if (section === 'moves') {
+    header = ['Data', 'Tipo', 'Pedra', 'Movimento', 'Quantidade', 'Saldo', 'Pedido / motivo', 'Observação', 'Usuário'];
+    const ACTION = { created: 'Cadastro', edited: 'Edição', used: 'Baixa', returned: 'Devolução', in: 'Entrada', out: 'Saída' };
+    rows = stock.movements({ kind: req.query.kind, type: req.query.type, text: req.query.q, from: req.query.from, to: req.query.to, limit: 5000 })
+      .map((m) => [fmtDate(m.created_at), stock.KINDS[m.kind], m.item, ACTION[m.action] || m.action, m.delta ?? '', m.qty_after ?? '', m.order_ref, m.detail, m.user_name || '']);
+  } else {
+    header = ['Código', 'Tipo', 'Corte', 'Peso (ct)', 'Dimensões (mm)', 'Cor', 'Claridade', 'Lapidação', 'Polimento', 'Simetria', 'Fluorescência', 'Laboratório', 'Método',
+      'Data do certificado', 'Situação', 'Pedido', 'Data da baixa', 'Observações'];
+    rows = stock.searchStones({ ...stoneQuery(req.query), sort: req.query.sort, dir: req.query.dir, limit: 2000 }).map((x) => [
+      x.code, stock.KINDS[x.kind], x.shape, fmtNum(x.carat), x.measurements, x.color, x.clarity, x.cut_grade, x.polish, x.symmetry, x.fluorescence, x.lab, x.method,
+      x.report_date ? x.report_date.split('-').reverse().join('/') : '', x.status === 'used' ? 'Usada' : 'Disponível', x.used_order, fmtDate(x.used_at), x.notes]);
+  }
+  const cell = (v) => { const t = String(v ?? ''); return /[";\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const csv = `\uFEFF${[header, ...rows].map((r) => r.map(cell).join(';')).join('\r\n')}`;
+  const names = { lab: 'diamantes-lab', moissanite: 'moissanites', melee: 'pedras-pequenas', moves: 'movimentacoes' };
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="estoque-${names[section] || 'pedras'}-${new Date().toISOString().slice(0, 10)}.csv"`);
+  res.send(csv);
 });
 
 router.get('/stones', (req, res) => {
