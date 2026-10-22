@@ -113,7 +113,7 @@ function fieldValueInput(def, value, onchange) {
 
 function conditionRow(c, onremove, redraw) {
   const params = [];
-  if (c.type === 'due_within') params.push(h('input', { type: 'number', min: 0, value: c.days ?? 2, style: { width: '70px' }, oninput: (e) => { c.days = Number(e.target.value); } }), 'dia(s)');
+  if (c.type === 'due_within') params.push(h('input', { type: 'number', min: 0, value: c.days ?? 2, style: { width: '70px' }, oninput: (e) => { c.days = Number(e.target.value); } }), h('span', { class: 'rule-unit' }, 'dia(s)'));
   if (c.type === 'has_label' || c.type === 'not_label') {
     c.label ??= state.labels[0]?.id;
     params.push(sel(state.labels.map((l) => [l.id, l.name || l.color]), c.label, (v) => { c.label = Number(v); }));
