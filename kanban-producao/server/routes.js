@@ -15,6 +15,8 @@ const correios = require('./correios');
 const automations = require('./automations');
 const print = require('./print');
 const comments = require('./comments');
+const stock = require('./stock');
+const certificate = require('./certificate');
 const { cycleMs, stats, columnDurations, resolveCycleColumns } = require('./cycle');
 
 const router = express.Router();
@@ -62,6 +64,8 @@ router.post('/auth/logout', (req, res) => {
 });
 
 router.use(auth.requireAuth);
+// Depois de qualquer alteração: avisa se alguma pedra pequena chegou no estoque mínimo
+router.use((req, res, next) => { if (req.method !== 'GET') res.on('finish', notifyLowStock); next(); });
 
 router.post('/auth/password', (req, res) => {
   const { current, password } = req.body;
@@ -148,8 +152,9 @@ function cardFilter(search) {
   if (!search) return { sql: '', params: [] };
   const like = `%${search}%`;
   return {
-    sql: `AND (c.title LIKE ? OR c.description LIKE ? OR c.id = ? OR c.id IN (SELECT card_id FROM card_field_values WHERE value LIKE ?))`,
-    params: [like, like, Number(search) || -1, like],
+    sql: `AND (c.title LIKE ? OR c.description LIKE ? OR c.id = ? OR c.id IN (SELECT card_id FROM card_field_values WHERE value LIKE ?)
+          OR c.id IN (SELECT card_id FROM stones WHERE card_id IS NOT NULL AND (code_norm LIKE ? OR (? != '' AND code_digits LIKE ?))))`,
+    params: [like, like, Number(search) || -1, like, `%${stock.normCode(search)}%`, stock.digitsOf(search).length >= 5 ? 'x' : '', `%${stock.digitsOf(search)}%`],
   };
 }
 
@@ -269,6 +274,7 @@ router.patch('/boards/:id', (req, res) => {
 router.delete('/boards/:id', auth.requireAdmin, (req, res) => {
   const board = boardOr404(req.params.id);
   if (q.get('SELECT COUNT(*) AS n FROM boards').n <= 1) throw httpError(400, 'Mantenha pelo menos um quadro.');
+  for (const c of q.all('SELECT id FROM cards WHERE board_id = ?', board.id)) stock.releaseCard(c.id, req.user.id, { reason: 'quadro excluído' });
   q.run('DELETE FROM cards WHERE board_id = ?', board.id);
   q.run('DELETE FROM boards WHERE id = ?', board.id);
   res.json({ ok: true });
@@ -412,6 +418,7 @@ router.put('/boards/:id/fields-order', (req, res) => {
 router.delete('/fields/:id', (req, res) => {
   const f = q.get('SELECT * FROM field_defs WHERE id = ?', req.params.id);
   if (!f) throw httpError(404, 'Campo não encontrado.');
+  stock.releaseField(f.id, req.user.id); // pedras usadas nesse campo voltam ao estoque
   q.run('DELETE FROM field_defs WHERE id = ?', f.id);
   logActivity(f.board_id, null, req.user.id, 'field.deleted', { name: f.name });
   events.boardChanged(f.board_id, req.user.id);
@@ -1045,5 +1052,150 @@ router.post('/integrations/notifications/check', auth.requireAdmin, external(asy
   await notifications.checkDueDates();
   res.json({ ok: true });
 }));
+
+// ---------------- Estoque de pedras ----------------
+const stonePhoto = multer({
+  storage: multer.diskStorage({
+    destination: UPLOAD_DIR,
+    filename: (_req, file, cb) => cb(null, `stone-${Date.now()}-${crypto.randomBytes(5).toString('hex')}${file.mimetype === 'image/png' ? '.png' : '.jpg'}`),
+  }),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => cb(null, /^image\/(jpeg|png|webp)$/.test(file.mimetype)),
+});
+
+function removeStonePhoto(name) {
+  if (name && /^stone-[\w.-]+$/.test(name) && !q.get('SELECT 1 FROM stones WHERE photo = ?', name)) fs.rm(path.join(UPLOAD_DIR, name), { force: true }, () => {});
+}
+
+/** Fotos de certificados enviadas mas nunca salvas (cadastro cancelado) somem depois de 1 dia */
+function cleanStonePhotos() {
+  try {
+    const cutoff = Date.now() - 864e5;
+    for (const name of fs.readdirSync(UPLOAD_DIR)) {
+      if (!name.startsWith('stone-')) continue;
+      if (fs.statSync(path.join(UPLOAD_DIR, name)).mtimeMs < cutoff) removeStonePhoto(name);
+    }
+  } catch (err) { console.error('[estoque] limpeza de fotos:', err.message); }
+}
+setTimeout(cleanStonePhotos, 30_000).unref();
+setInterval(cleanStonePhotos, 6 * 36e5).unref();
+
+/** Estoque mínimo atingido: avisa os administradores no sininho */
+function notifyLowStock() {
+  const items = stock.takeLowStockAlerts();
+  if (!items.length) return;
+  const admins = q.all("SELECT * FROM users WHERE role = 'admin' AND active = 1");
+  for (const item of items) {
+    notifications.deliver({ card: { id: null }, recipients: admins, text: `📉 Estoque baixo: ${stock.meleeLabel(item)}: ${item.qty} un. (mínimo ${item.min_qty})`, title: 'Estoque de pedras' })
+      .catch((err) => console.error('[estoque] aviso:', err.message));
+  }
+}
+
+const stoneOut = (s) => s && ({ ...s, photo_url: s.photo ? `/uploads/${s.photo}` : null, label: stock.stoneLabel(s) });
+function stoneCard(s) {
+  if (!s?.card_id) return null;
+  const c = q.get('SELECT c.id, c.title, c.board_id, c.archived, col.name AS column_name FROM cards c JOIN columns col ON col.id = c.column_id WHERE c.id = ?', s.card_id);
+  return c ? { ...c, archived: !!c.archived } : null;
+}
+
+router.get('/stock', (req, res) => {
+  const ai = getSetting('stock_ai', {});
+  res.json({
+    kinds: stock.KINDS,
+    shapes: stock.SHAPES,
+    counts: stock.stoneCounts(),
+    melee: stock.listMelee(),
+    ai: { configured: !!certificate.apiKey(), from_env: !ai.api_key && !!process.env.ANTHROPIC_API_KEY, key: req.user.role === 'admin' ? mask(ai.api_key) : '', model: certificate.MODEL },
+  });
+});
+
+router.put('/stock/ai', auth.requireAdmin, (req, res) => {
+  const key = String(req.body.api_key ?? '').trim();
+  if (!isMasked(key)) setSetting('stock_ai', { ...getSetting('stock_ai', {}), api_key: key });
+  res.json({ ok: true, configured: !!certificate.apiKey() });
+});
+
+router.get('/stones', (req, res) => {
+  res.json(stock.searchStones({ text: req.query.q, kind: req.query.kind, status: req.query.status, shape: req.query.shape, limit: req.query.limit }).map(stoneOut));
+});
+
+// Código digitado ou bipado: pedras com esse código exato (o código de barras do IGI vem sem o "LG")
+router.get('/stones/lookup', (req, res) => res.json(stock.findByCode(req.query.code).map(stoneOut)));
+
+router.get('/stones/:id', (req, res) => {
+  const s = stock.stoneRow(Number(req.params.id));
+  if (!s) throw httpError(404, 'Pedra não encontrada.');
+  res.json({ ...stoneOut(s), card: stoneCard(s), history: stock.stoneHistory(s.id) });
+});
+
+// Foto do certificado/etiqueta: guarda e (se configurado) lê os campos automaticamente
+router.post('/stones/photo', stonePhoto.single('photo'), wrap(async (req, res) => {
+  if (!req.file) throw httpError(400, 'Envie uma foto (JPG ou PNG).');
+  const out = { photo: req.file.filename, photo_url: `/uploads/${req.file.filename}`, fields: null, error: null };
+  if (req.query.read === '1') {
+    try { out.fields = await certificate.readCertificate(req.file.path, req.file.mimetype); } catch (err) { out.error = err.message; }
+  }
+  res.json(out);
+}));
+
+router.post('/stones', (req, res) => {
+  const s = stock.createStone(req.body, req.user.id);
+  res.json(stoneOut(s));
+});
+
+router.patch('/stones/:id', (req, res) => {
+  const { stone, oldPhoto } = stock.updateStone(Number(req.params.id), req.body, req.user.id);
+  removeStonePhoto(oldPhoto);
+  if (stone.card_id) { const c = stoneCard(stone); if (c) events.boardChanged(c.board_id, req.user.id, c.id); }
+  res.json(stoneOut(stone));
+});
+
+router.delete('/stones/:id', auth.requireAdmin, (req, res) => {
+  const s = stock.deleteStone(Number(req.params.id));
+  removeStonePhoto(s.photo);
+  res.json({ ok: true });
+});
+
+// Baixa manual (sem card): ex.: pedra usada num pedido antigo ou quebrada
+router.post('/stones/:id/use', (req, res) => {
+  if (!String(req.body.order || '').trim()) throw httpError(400, 'Informe o pedido ou o motivo da baixa.');
+  res.json(stoneOut(stock.useStone(Number(req.params.id), { orderRef: req.body.order, userId: req.user.id })));
+});
+
+// Devolver ao estoque: se a pedra estava num card, o campo do card fica vazio
+router.post('/stones/:id/return', (req, res) => {
+  const s = stock.stoneRow(Number(req.params.id));
+  if (!s) throw httpError(404, 'Pedra não encontrada.');
+  const card = stoneCard(s);
+  if (card && s.field_id) {
+    const f = q.get('SELECT * FROM field_defs WHERE id = ?', s.field_id);
+    q.run('DELETE FROM card_field_values WHERE card_id = ? AND field_id = ?', card.id, s.field_id);
+    logActivity(card.board_id, card.id, req.user.id, 'card.field', { field: f?.name || 'Pedra', from: stock.stoneLabel(s), to: '' });
+  }
+  const out = stock.returnStone(s.id, { userId: req.user.id, reason: 'devolvida pela tela de estoque' });
+  if (card) events.boardChanged(card.board_id, req.user.id, card.id);
+  res.json(stoneOut(out));
+});
+
+router.get('/melee', (req, res) => res.json(stock.listMelee()));
+
+router.get('/melee/:id', (req, res) => {
+  const item = stock.meleeRow(Number(req.params.id));
+  if (!item) throw httpError(404, 'Item não encontrado.');
+  const history = stock.meleeHistory(item.id).map((m) => ({ ...m, card: m.card_id ? q.get('SELECT id, board_id, title FROM cards WHERE id = ?', m.card_id) || null : null }));
+  res.json({ ...item, label: stock.meleeLabel(item), history });
+});
+
+router.post('/melee', (req, res) => res.json(stock.createMelee(req.body, req.user.id)));
+router.patch('/melee/:id', (req, res) => res.json(stock.updateMelee(Number(req.params.id), req.body)));
+router.delete('/melee/:id', auth.requireAdmin, (req, res) => { stock.deleteMelee(Number(req.params.id)); res.json({ ok: true }); });
+
+// Entrada (compra) ou saída avulsa de pedras pequenas
+router.post('/melee/:id/moves', (req, res) => {
+  const delta = Math.round(Number(req.body.delta) || 0);
+  if (!delta) throw httpError(400, 'Informe a quantidade.');
+  if (delta < 0 && !String(req.body.note || '').trim()) throw httpError(400, 'Informe o motivo da saída (pedido, quebra…).');
+  res.json(stock.moveMelee(Number(req.params.id), delta, { userId: req.user.id, note: req.body.note, orderRef: delta < 0 ? req.body.note : '' }));
+});
 
 module.exports = { router, seedBoard, dashboardData };

@@ -197,6 +197,80 @@ CREATE TABLE IF NOT EXISTS comments (
 CREATE INDEX IF NOT EXISTS idx_comments_card ON comments(card_id, id);
 CREATE INDEX IF NOT EXISTS idx_comments_board ON comments(board_id, card_id, id);
 
+-- Estoque de pedras: diamantes de laboratório e moissanites (uma por código) e pedras pequenas (por quantidade)
+CREATE TABLE IF NOT EXISTS stones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL DEFAULT 'lab',               -- lab | moissanite
+  code TEXT NOT NULL,                             -- como está no certificado/etiqueta (ex.: LG797609310, GRA 28063453)
+  code_norm TEXT NOT NULL UNIQUE,                 -- só letras e números, maiúsculas (para comparar)
+  code_digits TEXT NOT NULL DEFAULT '',           -- só os números (o código de barras do IGI vem sem o "LG")
+  shape TEXT NOT NULL DEFAULT '',
+  measurements TEXT NOT NULL DEFAULT '',
+  carat REAL,
+  color TEXT NOT NULL DEFAULT '',
+  clarity TEXT NOT NULL DEFAULT '',
+  cut_grade TEXT NOT NULL DEFAULT '',
+  polish TEXT NOT NULL DEFAULT '',
+  symmetry TEXT NOT NULL DEFAULT '',
+  fluorescence TEXT NOT NULL DEFAULT '',
+  lab TEXT NOT NULL DEFAULT '',
+  method TEXT NOT NULL DEFAULT '',
+  report_date TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  photo TEXT,                                     -- foto do certificado/etiqueta (pasta de uploads)
+  status TEXT NOT NULL DEFAULT 'available',       -- available | used
+  card_id INTEGER,
+  field_id INTEGER,
+  used_order TEXT NOT NULL DEFAULT '',            -- pedido onde foi usada (texto, fica mesmo se o card sumir)
+  used_at TEXT,
+  used_by INTEGER,
+  created_by INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_stones_list ON stones(kind, status, shape);
+CREATE INDEX IF NOT EXISTS idx_stones_card ON stones(card_id);
+
+CREATE TABLE IF NOT EXISTS stone_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  stone_id INTEGER NOT NULL REFERENCES stones(id) ON DELETE CASCADE,
+  action TEXT NOT NULL,                           -- created | edited | used | returned
+  card_id INTEGER,
+  order_ref TEXT NOT NULL DEFAULT '',
+  user_id INTEGER,
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_stone_log ON stone_log(stone_id, id);
+
+CREATE TABLE IF NOT EXISTS melee_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL DEFAULT 'lab',
+  shape TEXT NOT NULL,
+  size TEXT NOT NULL,                             -- ex.: "1,5 mm", "5 × 3 mm"
+  size_norm TEXT NOT NULL,
+  qty INTEGER NOT NULL DEFAULT 0,
+  min_qty INTEGER NOT NULL DEFAULT 0,             -- avisa quando chegar nesse número (0 = sem aviso)
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (kind, shape, size_norm)
+);
+
+CREATE TABLE IF NOT EXISTS melee_moves (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id INTEGER NOT NULL REFERENCES melee_items(id) ON DELETE CASCADE,
+  delta INTEGER NOT NULL,                         -- + entrada, - saída
+  qty_after INTEGER NOT NULL,
+  card_id INTEGER,
+  order_ref TEXT NOT NULL DEFAULT '',
+  user_id INTEGER,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_melee_moves ON melee_moves(item_id, id);
+CREATE INDEX IF NOT EXISTS idx_melee_moves_card ON melee_moves(card_id);
+
 CREATE TABLE IF NOT EXISTS notification_log (
   dedupe_key TEXT PRIMARY KEY,
   sent_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))

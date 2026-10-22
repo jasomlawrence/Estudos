@@ -335,7 +335,7 @@ export function cardElement(card) {
       hl.filter((x) => x.text).map((x) => h('span', { class: 'card-alert', style: { '--hl': x.color } }, x.text))) : null,
     card.labels.length ? h('div', { class: 'card-labels' }, card.labels.map(labelById).filter(Boolean).map((l) => h('span', { class: 'label', style: { background: l.color, color: textColorFor(l.color) }, title: l.name }, l.name))) : null,
     h('div', { class: 'card-title' }, card.title),
-    visibleFields.length ? h('dl', { class: 'card-fields' }, visibleFields.map((f) => [h('dt', {}, f.name), h('dd', {}, fieldChip(f, card.fields[f.id]))])) : null,
+    visibleFields.length ? h('dl', { class: 'card-fields' }, visibleFields.map((f) => [h('dt', {}, f.name), h('dd', {}, fieldChip(f, card.fields[f.id], card))])) : null,
     h('div', { class: 'card-badges' },
       due, timer,
       card.source === 'shopify' ? h('span', { class: 'badge shopify', title: 'Pedido do Shopify' }, icon('bag', 13)) : null,
@@ -350,7 +350,7 @@ export function highlightRing(list) {
   return list.slice(0, 3).map((x, i) => `inset 0 0 0 ${3 * (i + 1)}px ${x.color}`).join(', ');
 }
 
-function fieldChip(def, value) {
+function fieldChip(def, value, card) {
   if (def.type === 'checklist') {
     const p = checklistProgress(def, value);
     return p.total ? h('span', { class: `chip checklist-chip${p.done === p.total ? ' complete' : ''}`, title: `${p.done} de ${p.total} itens marcados` }, icon('checklist', 12), `${p.done}/${p.total}`) : '';
@@ -359,7 +359,7 @@ function fieldChip(def, value) {
     const o = def.options.find((x) => x.id === value);
     return o ? h('span', { class: 'chip', style: { background: o.color, color: textColorFor(o.color) } }, o.label) : '';
   }
-  return fieldText(def, value);
+  return fieldText(def, value, card);
 }
 
 export function dueBadge(card) {

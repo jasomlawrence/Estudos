@@ -1029,3 +1029,123 @@ fieldset { min-width: 0; }
   /* Card aberto */
   .card-detail-grid input[type=date], .card-detail-grid input[type=datetime-local] { width: 100%; }
 }
+
+/* ---------- Estoque de pedras ---------- */
+.stock-modal { max-width: 980px; }
+.stock-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.stock-tabs { overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+.stock-tabs button { white-space: nowrap; }
+.stock-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.stock-search { flex: 1 1 240px; max-width: none; background: var(--surface-2); border-color: transparent; }
+.stock-shapes { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.stock-hint { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: space-between; margin-bottom: 12px; }
+.stock-empty { text-align: center; padding: 28px 12px; }
+.stone-list, .melee-list { display: flex; flex-direction: column; gap: 6px; }
+.stone-row {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; text-align: left; width: 100%;
+  border: 1px solid var(--border); background: var(--surface); border-radius: 14px; padding: 8px 12px 8px 8px; cursor: pointer;
+}
+.stone-row:hover { border-color: #cfc6f5; box-shadow: var(--shadow-sm); }
+.stone-row.used { background: var(--surface-2); }
+.stone-thumb { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; background: var(--surface-2); }
+.stone-thumb.empty { display: grid; place-items: center; color: var(--muted); }
+.stone-main { display: flex; flex-direction: column; min-width: 0; }
+.stone-main strong { font-size: 15px; letter-spacing: .01em; }
+.stone-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stone-grades { display: flex; gap: 4px; }
+.grade { font-weight: 800; font-size: 12px; background: var(--primary-soft); color: var(--primary); border-radius: 8px; padding: 3px 8px; }
+.stone-status { margin: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+.chip.kind-lab { background: #e3f0ff; color: #2b6cb0; margin: 0 0 0 6px; }
+.chip.kind-moissanite { background: #fbe7ff; color: #9b3fb5; margin: 0 0 0 6px; }
+
+.melee-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center;
+  border: 1px solid var(--border); background: var(--surface); border-radius: 14px; padding: 8px 10px 8px 14px;
+}
+.melee-row.low { border-color: #ffc2d1; background: #fff7f9; }
+.melee-row.empty .melee-qty { color: var(--muted); }
+.melee-main { border: 0; background: none; text-align: left; padding: 4px 0; cursor: pointer; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.melee-main strong { font-size: 15px; }
+.melee-qty { display: flex; align-items: baseline; gap: 4px; font-variant-numeric: tabular-nums; }
+.melee-qty strong { font-size: 20px; }
+.melee-actions { display: flex; gap: 6px; }
+.melee-summary { font-size: 18px; margin-bottom: 6px; }
+.melee-move .form-row { grid-template-columns: 1fr; gap: 4px; margin: 8px 0; }
+.melee-move input, .melee-move select { width: 100%; }
+
+/* Cadastro / detalhe */
+.stone-form-modal, .stone-detail-modal { max-width: 560px; }
+.stone-photo-box { margin-bottom: 10px; }
+.stone-photo-empty {
+  width: 100%; border: 2px dashed #cfc6f5; background: var(--primary-soft); color: var(--primary); border-radius: 16px; padding: 22px 14px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; text-align: center;
+}
+.stone-photo-empty small { color: var(--muted); font-weight: 500; }
+.stone-photo { display: flex; align-items: flex-end; gap: 10px; }
+.stone-photo img { max-height: 180px; max-width: 70%; border-radius: 12px; box-shadow: var(--shadow-sm); cursor: zoom-in; object-fit: contain; background: var(--surface-2); }
+.stone-read-status { white-space: pre-line; border-radius: 12px; padding: 10px 12px; margin: 0 0 10px; background: var(--surface-2); font-size: 13px; }
+.stone-read-status.ok { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+.stone-read-status.warn { background: var(--warn-soft); color: var(--warn); }
+.stone-read-status.error { background: var(--danger-soft); color: var(--danger); }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.stone-form-modal .form-row { grid-template-columns: 150px minmax(0, 1fr); margin: 8px 0; }
+.stone-form-modal .form-row > textarea { width: 100%; font-weight: 400; }
+.stone-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
+.stone-grid .form-row { grid-template-columns: 1fr; gap: 4px; }
+.stone-more { margin: 6px 0 10px; }
+.stone-more summary { cursor: pointer; color: var(--primary); font-weight: 700; padding: 4px 0; }
+.stone-detail-photo { width: 100%; max-height: 260px; object-fit: contain; border-radius: 14px; background: var(--surface-2); cursor: zoom-in; margin-bottom: 10px; }
+.stone-used, .stone-available { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.stone-available { background: var(--ok-soft); }
+.stone-used { background: #fff1f4; }
+.stone-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 10px; }
+.stone-facts dt { color: var(--muted); font-weight: 600; }
+.stone-facts dd { margin: 0; font-weight: 700; }
+.stone-notes { white-space: pre-line; background: var(--surface-2); border-radius: 12px; padding: 8px 12px; }
+.stone-history { list-style: none; padding: 0; margin: 0 0 14px; display: flex; flex-direction: column; gap: 8px; }
+.stone-history li { border-left: 3px solid var(--border); padding-left: 10px; }
+.ok-text { color: var(--ok); }
+
+/* Campos do card */
+.field.field-stone, .field.field-melee { grid-column: 1 / -1; }
+.stock-field { position: relative; }
+.stock-field .row input { flex: 1; min-width: 0; }
+.stock-suggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-lg);
+  padding: 4px; max-height: 260px; overflow: auto;
+}
+.stock-suggest-item { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.stock-suggest-item:hover { background: var(--primary-soft); }
+.stock-suggest-empty { padding: 8px 10px; }
+.stock-pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 8px 10px 8px 12px; background: var(--surface); flex-wrap: wrap; }
+.stock-pick-main { min-width: 0; }
+.stock-pick-list { max-height: 320px; overflow: auto; margin-top: 6px; }
+.melee-field { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.melee-lines { list-style: none; padding: 0; margin: 0; width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.melee-lines li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 12px; padding: 4px 6px 4px 10px; background: var(--surface); }
+.melee-line-qty { font-weight: 800; min-width: 34px; font-variant-numeric: tabular-nums; }
+.melee-line-name { flex: 1; min-width: 0; }
+.melee-line-actions { display: flex; }
+
+/* Leitor de código de barras */
+.scan-overlay { position: fixed; inset: 0; z-index: 400; background: #0d0b16; color: #fff; display: flex; flex-direction: column; }
+.scan-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; }
+.scan-stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
+.scan-video { width: 100%; height: 100%; object-fit: cover; }
+.scan-frame { position: absolute; width: min(80vw, 420px); height: 120px; border: 3px solid rgba(255, 255, 255, .9); border-radius: 16px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .35); }
+.scan-tip { text-align: center; padding: 12px 16px 22px; margin: 0; opacity: .85; font-size: 13px; }
+
+@media (max-width: 760px) {
+  .stock-head { flex-direction: column; align-items: stretch; }
+  .stock-head > .row { justify-content: space-between; }
+  .stock-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stock-tabs button { white-space: normal; line-height: 1.25; padding: 6px 4px; font-size: 13px; }
+  .stone-row { grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-areas: 'thumb main grades' 'thumb status status'; row-gap: 6px; }
+  .stone-thumb { grid-area: thumb; width: 40px; height: 40px; }
+  .stone-main { grid-area: main; }
+  .stone-grades { grid-area: grades; }
+  .stone-status { grid-area: status; justify-self: start; max-width: 100%; }
+  .stone-form-modal .form-row { grid-template-columns: minmax(0, 1fr); }
+  .stone-grid { grid-template-columns: 1fr 1fr; }
+}
