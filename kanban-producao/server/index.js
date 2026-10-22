@@ -63,6 +63,7 @@ app.use('/vendor/sortable', express.static(path.dirname(require.resolve('sortabl
 // QR code e código de barras das etiquetas de impressão
 app.use('/vendor/qrcode', express.static(path.dirname(require.resolve('qrcode-generator'))));
 app.use('/vendor/jsbarcode', express.static(path.join(path.dirname(require.resolve('jsbarcode/package.json')), 'dist')));
+app.use('/vendor/zxing', express.static(path.join(path.dirname(require.resolve('zxing-wasm/reader')), '..', '..'), { maxAge: '7d' })); // leitor de código de barras (WebAssembly)
 // "no-cache": o navegador confere com o servidor a cada abertura, então uma atualização nunca mistura arquivos novos e antigos
 app.use(express.static(path.join(__dirname, '..', 'public'), {
   setHeaders: (res, file) => { if (/\.(html|js|css)$/.test(file)) res.setHeader('Cache-Control', 'no-cache'); },

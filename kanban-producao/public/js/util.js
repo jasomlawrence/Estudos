@@ -91,6 +91,10 @@ const ICONS = {
   move: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
   gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+  scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8v8"/><path d="M11 8v8"/><path d="M14 8v8"/><path d="M17 8v8"/>',
+  minus: '<path d="M5 12h14"/>',
   alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
   octagon: '<path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
   pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
@@ -186,8 +190,10 @@ export function checklistProgress(def, value) {
   return { done: items.filter((i) => i.done).length, total: items.length };
 }
 
-export function fieldText(def, value) {
+/** card: necessário para os campos do estoque (o texto da pedra vem do servidor em card.stock_text) */
+export function fieldText(def, value, card = null) {
   if (value === null || value === undefined || value === '') return '';
+  if (def.type === 'stone' || def.type === 'melee') return card?.stock_text?.[def.id] || '';
   switch (def.type) {
     case 'checkbox': return value ? '✔ Sim' : 'Não';
     case 'currency': return fmtMoney(value);

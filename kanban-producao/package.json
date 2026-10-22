@@ -13,11 +13,13 @@
     "node": ">=22.13"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
     "express": "^4.22.3",
     "jsbarcode": "^3.12.3",
     "multer": "^2.4.0",
     "nodemailer": "^10.1.1",
     "qrcode-generator": "^2.0.4",
-    "sortablejs": "^1.15.7"
+    "sortablejs": "^1.15.7",
+    "zxing-wasm": "^3.1.6"
   }
 }

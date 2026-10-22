@@ -4,8 +4,9 @@ const { q, transaction, now, getSetting } = require('./db');
 const { bus, boardChanged } = require('./events');
 const { computeCycle, columnDurations } = require('./cycle');
 const rules = require('./rules');
+const stock = require('./stock');
 
-const FIELD_TYPES = ['text', 'textarea', 'number', 'currency', 'date', 'datetime', 'checkbox', 'select', 'multiselect', 'checklist', 'url', 'email', 'phone'];
+const FIELD_TYPES = ['text', 'textarea', 'number', 'currency', 'date', 'datetime', 'checkbox', 'select', 'multiselect', 'checklist', 'url', 'email', 'phone', 'stone', 'melee'];
 
 function logActivity(boardId, cardId, userId, action, details = {}) {
   q.run('INSERT INTO activity (board_id, card_id, user_id, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -56,6 +57,8 @@ function normalizeValue(def, value) {
       const done = [...new Set((Array.isArray(v.done) ? v.done : []).map(String))].filter((id) => valid.has(id));
       return done.length || extra.length ? { done, extra } : null;
     }
+    case 'stone': { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; } // id da pedra no estoque
+    case 'melee': return stock.normalizeMeleeValue(value); // [{ item, qty }]
     default: return String(value);
   }
 }
@@ -119,6 +122,9 @@ const changeFieldType = transaction((fieldId, type, { dryRun = false, userId = n
   const old = fieldDefs(q.get('SELECT board_id FROM field_defs WHERE id = ?', fieldId)?.board_id ?? -1).find((f) => f.id === fieldId);
   if (!old) throw httpError(404, 'Campo não encontrado.');
   if (!FIELD_TYPES.includes(type)) throw httpError(400, 'Tipo de campo inválido.');
+  if (old.type !== type && (stock.STOCK_TYPES.includes(old.type) || stock.STOCK_TYPES.includes(type))) {
+    throw httpError(400, 'Campos ligados ao estoque de pedras não mudam de tipo. Crie um campo novo.');
+  }
   const rows = q.all('SELECT card_id, value FROM card_field_values WHERE field_id = ?', fieldId).map((r) => ({ ...r, value: parseJSON(r.value, null) }));
   let options = old.options;
   if (LIST_TYPES.includes(type) && !LIST_TYPES.includes(old.type) && type !== 'checklist') {
@@ -168,6 +174,7 @@ function displayValue(def, value) {
     case 'select': return def.options.find((o) => o.id === value)?.label ?? '';
     case 'multiselect': return value.map((id) => def.options.find((o) => o.id === id)?.label).filter(Boolean).join(', ');
     case 'checklist': { const p = checklistProgress(def, value); return p.total ? `${p.done}/${p.total} itens marcados` : ''; }
+    case 'stone': case 'melee': return stock.displayStock(def.type, value);
     default: return String(value);
   }
 }
@@ -225,6 +232,9 @@ const setFieldValues = (card, values, userId, log = true) => {
     const old = q.get('SELECT value FROM card_field_values WHERE card_id = ? AND field_id = ?', card.id, def.id);
     const oldValue = old ? parseJSON(old.value, null) : null;
     if (JSON.stringify(oldValue) === JSON.stringify(value)) continue;
+    // Campos do estoque: baixa da pedra nova e devolução da antiga (erro se a pedra já estiver em outro pedido)
+    if (def.type === 'stone') stock.applyStoneField(card, def, oldValue, value, userId);
+    if (def.type === 'melee') stock.applyMeleeField(card, def, oldValue, value, userId);
     if (value === null) q.run('DELETE FROM card_field_values WHERE card_id = ? AND field_id = ?', card.id, def.id);
     else q.run(`INSERT INTO card_field_values (card_id, field_id, value) VALUES (?, ?, ?)
                 ON CONFLICT(card_id, field_id) DO UPDATE SET value = excluded.value`, card.id, def.id, JSON.stringify(value));
@@ -395,7 +405,8 @@ const duplicateCard = transaction((cardId, { title, columnId, include = DUP_PART
     description: inc.has('description') ? src.description : '',
     color: inc.has('color') ? src.color : null,
     dueDate: inc.has('due_date') ? src.due_date : null,
-    fields: inc.has('fields') ? data.fields : {},
+    // Pedras do estoque não vão para a cópia (cada pedra só pode estar em um pedido)
+    fields: inc.has('fields') ? Object.fromEntries(Object.entries(data.fields).filter(([fid]) => !stockFieldIds(src.board_id).has(Number(fid)))) : {},
     labels: inc.has('labels') ? data.labels : [],
     shipping: inc.has('fields') ? { zip: src.shipping_zip, promised: src.promised_date, days: src.correios_days, service: src.correios_service } : {},
   }, userId);
@@ -415,16 +426,19 @@ const duplicateCard = transaction((cardId, { title, columnId, include = DUP_PART
   return id;
 });
 
-function deleteCard(cardId, userId) {
+const stockFieldIds = (boardId) => new Set(q.all("SELECT id FROM field_defs WHERE board_id = ? AND type IN ('stone', 'melee')", boardId).map((f) => f.id));
+
+const deleteCard = transaction((cardId, userId) => {
   const card = q.get('SELECT * FROM cards WHERE id = ?', cardId);
   if (!card) throw httpError(404, 'Card não encontrado.');
   const files = q.all('SELECT filename FROM attachments WHERE card_id = ?', card.id);
+  stock.releaseCard(card.id, userId); // as pedras do card voltam ao estoque
   q.run('DELETE FROM cards WHERE id = ?', card.id);
   logActivity(card.board_id, null, userId, 'card.deleted', { title: card.title, cardId: card.id });
   bus.emit('card:deleted', { cardId: card.id, boardId: card.board_id });
   boardChanged(card.board_id, userId, card.id);
   return files.map((f) => f.filename);
-}
+});
 
 function afterChange(boardId, cardId, userId, events = []) {
   // Alterações feitas por uma automação não disparam outras automações (evita repetição sem fim)
@@ -479,6 +493,9 @@ function serializeCards(rows) {
   const recent = rows.filter((r) => cutoffs.get(r.board_id) && r.created_at >= cutoffs.get(r.board_id)).map((r) => r.id);
   const moves = recent.length ? groupedByCard('SELECT card_id, COUNT(*) AS n FROM card_movements WHERE card_id IN (%IDS%) GROUP BY card_id', recent) : new Map();
   const isNew = new Set(recent.filter((id) => (moves.get(id)?.[0].n || 0) <= 1));
+  // Campos do estoque guardam o id da pedra: o texto para exibir vai junto
+  const stockFields = new Map(q.all("SELECT id, type FROM field_defs WHERE type IN ('stone', 'melee')").map((f) => [f.id, f.type]));
+  const stockText = stockFields.size ? stock.stockTexts([...values.values()].flat().filter((v) => stockFields.has(v.field_id)), stockFields) : new Map();
   // Regras de destaque visual ("sempre"), por quadro
   const visual = {};
   for (const boardId of new Set(rows.map((r) => r.board_id))) {
@@ -519,6 +536,7 @@ function serializeCards(rows) {
     attachment_count: atts.get(r.id)?.[0].n || 0,
     comment_count: comments.get(r.id)?.[0].n || 0,
     is_new: isNew.has(r.id),
+    ...(stockText.has(r.id) ? { stock_text: stockText.get(r.id) } : {}),
   }));
 }
 
@@ -527,6 +545,7 @@ function cardDetail(cardId) {
   if (!row) throw httpError(404, 'Card não encontrado.');
   const [card] = serializeCards([row]);
   // Link do admin da Shopify (o link principal do card é a página aberta do pedido)
+  card.stock = stock.cardStock(cardId);
   card.admin_url = row.external_id?.startsWith('shopify:') ? require('./shopify').adminOrderUrl(row) : null;
   card.attachments = q.all(`SELECT a.*, u.name AS uploaded_by_name FROM attachments a LEFT JOIN users u ON u.id = a.uploaded_by
                             WHERE a.card_id = ? ORDER BY a.id DESC`, cardId)

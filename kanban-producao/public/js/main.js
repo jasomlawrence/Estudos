@@ -11,6 +11,7 @@ import { openActivity } from './activity.js';
 import { loadCalendar } from './calendar.js';
 import { loadDashboard } from './dashboard.js';
 import { setSelecting } from './selection.js';
+import { openStock } from './stock.js';
 
 async function start() {
   const me = await get('/auth/me');
@@ -123,6 +124,7 @@ function renderShell() {
       search,
       h('div', { class: 'top-actions' },
         selectBtn,
+        topBtn('gem', 'Estoque', 'Estoque de pedras', () => openStock(openCard)),
         topBtn('clock', 'Produção', 'Tempo de produção', () => openMetrics(openCard)),
         topBtn('history', 'Atividade', 'Histórico de alterações', () => openActivity(openCard)),
         archivedBtn,
@@ -179,7 +181,7 @@ async function openNotifications(anchor) {
     h('div', { class: 'menu-title' }, 'Notificações'),
     'Notification' in window && Notification.permission === 'default'
       ? h('button', { class: 'btn small block', onclick: () => Notification.requestPermission() }, 'Ativar notificações do navegador') : null,
-    r?.items.length ? r.items.map((n) => h('button', { class: `notif${n.read ? '' : ' unread'}`, onclick: () => { pop.close(); if (n.card_id) openCard(n.card_id); else if (n.message.startsWith('💬')) openChat(); } },
+    r?.items.length ? r.items.map((n) => h('button', { class: `notif${n.read ? '' : ' unread'}`, onclick: () => { pop.close(); if (n.card_id) openCard(n.card_id); else if (n.message.startsWith('💬')) openChat(); else if (n.message.startsWith('📉')) openStock(openCard, { section: 'melee' }); } },
       h('div', {}, n.message.split('\n')[0]), h('small', { class: 'muted' }, timeAgo(n.created_at)))) : h('p', { class: 'muted' }, 'Nenhuma notificação.')), { width: 360 });
   if (r?.unread) { await post('/notifications/read'); refreshNotifications(); }
 }

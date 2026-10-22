@@ -81,7 +81,7 @@ function itemContent(item, card) {
   }
   if (f) {
     const v = card.fields[f.id];
-    const text = fieldText(f, v) || '—';
+    const text = fieldText(f, v, card) || '—';
     return named(f.name, h('span', {}, text));
   }
   switch (item.key) {
@@ -110,7 +110,8 @@ function itemContent(item, card) {
     case 'barcode': {
       const src = item.source || 'card_id';
       const sf = fieldOf(src);
-      const value = sf ? fieldText(sf, card.fields[sf.id]) : String(card.id);
+      const text = sf ? fieldText(sf, card.fields[sf.id], card) : String(card.id);
+      const value = sf?.type === 'stone' ? text.split(' · ')[0] : text; // pedra do estoque: só o código
       if (!value) return h('span', { class: 'lbl-warn' }, `${sf?.name || 'Campo'} vazio`);
       const svg = barcodeSvg(value);
       if (svg.style) {

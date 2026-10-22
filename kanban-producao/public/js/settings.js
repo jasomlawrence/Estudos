@@ -11,7 +11,9 @@ const FIELD_TYPES = [
   ['text', 'Texto curto'], ['textarea', 'Texto longo'], ['number', 'Número'], ['currency', 'Valor (R$)'],
   ['date', 'Data'], ['datetime', 'Data e hora'], ['checkbox', 'Sim / Não'], ['select', 'Lista de opções'],
   ['multiselect', 'Múltipla escolha'], ['checklist', 'Checklist (itens para marcar)'], ['url', 'Link'], ['email', 'E-mail'], ['phone', 'Telefone / WhatsApp'],
+  ['stone', 'Pedra do estoque (diamante lab / moissanite)'], ['melee', 'Pedras pequenas do estoque (quantidade)'],
 ];
+const STOCK_TYPES = ['stone', 'melee'];
 
 export function openSettings(tab = 'board') {
   const m = modal({ title: 'Configurações', wide: true, className: 'settings-modal', onClose: () => loadBoard() });
@@ -626,7 +628,7 @@ function fieldDefEditor(f, index, redraw) {
     h('div', { class: 'row' },
       h('span', { class: 'drag-handle', title: 'Arraste para mudar a ordem' }, '⋮⋮'),
       name,
-      h('select', { class: 'field-type', title: 'Tipo do campo (pode ser trocado)', onchange: async (e) => {
+      h('select', { class: 'field-type', title: STOCK_TYPES.includes(f.type) ? 'Campos do estoque não mudam de tipo' : 'Tipo do campo (pode ser trocado)', disabled: STOCK_TYPES.includes(f.type), onchange: async (e) => {
         const type = e.target.value;
         const label = FIELD_TYPES.find(([v]) => v === type)?.[1];
         const preview = await attempt(() => post(`/fields/${f.id}/type`, { type, dry_run: true }));
@@ -639,13 +641,13 @@ function fieldDefEditor(f, index, redraw) {
         const r = await attempt(() => post(`/fields/${f.id}/type`, { type }));
         if (r) { toast(`Tipo alterado: ${r.converted} valor(es) convertido(s)${r.lost ? `, ${r.lost} apagado(s)` : ''}`, 'ok'); redraw(); }
         else e.target.value = f.type;
-      } }, FIELD_TYPES.map(([v, l]) => h('option', { value: v, selected: v === f.type }, l))),
+      } }, FIELD_TYPES.filter(([v]) => v === f.type || !STOCK_TYPES.includes(v)).map(([v, l]) => h('option', { value: v, selected: v === f.type }, l))),
       h('label', { class: 'check' }, show, ' Mostrar no card'),
       h('button', { class: 'btn small primary', onclick: async () => {
         if (await attempt(() => patch(`/fields/${f.id}`, { name: name.value, show_on_card: show.checked, options: hasOptions ? options : undefined }), 'Campo salvo')) redraw();
       } }, 'Salvar'),
       h('button', { class: 'btn small subtle', onclick: async () => {
-        if (await confirmDialog(`Excluir o campo "${f.name}"? Os valores preenchidos em todos os cards serão apagados.`)) { await attempt(() => del(`/fields/${f.id}`)); redraw(); }
+        if (await confirmDialog(`Excluir o campo "${f.name}"? ${STOCK_TYPES.includes(f.type) ? 'As pedras usadas nesse campo voltam ao estoque como disponíveis.' : 'Os valores preenchidos em todos os cards serão apagados.'}`)) { await attempt(() => del(`/fields/${f.id}`)); redraw(); }
       } }, 'Excluir')),
     optBox.childElementCount ? optBox : null);
 }

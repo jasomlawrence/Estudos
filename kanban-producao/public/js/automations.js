@@ -32,7 +32,7 @@ const OPS = {
 const VISUAL_ACTIONS = [['highlight', 'Cor da borda (+ aviso)'], ['paint', 'Cor do card']];
 const CHECKLIST_OPS = [['complete', 'está todo marcado'], ['incomplete', 'tem itens sem marcar'], ['filled', 'tem algum item marcado'], ['empty', 'não tem nada marcado']];
 const noValueOps = new Set(['filled', 'empty', 'complete', 'incomplete']);
-const opsFor = (def) => (def?.type === 'checklist' ? CHECKLIST_OPS : [...(OPS[{ textarea: 'text', url: 'text', email: 'text', phone: 'text', currency: 'number', datetime: 'date', multiselect: 'select' }[def?.type] || def?.type] || OPS.text),
+const opsFor = (def) => (def?.type === 'checklist' ? CHECKLIST_OPS : ['stone', 'melee'].includes(def?.type) ? [['filled', 'está preenchido'], ['empty', 'está vazio']] : [...(OPS[{ textarea: 'text', url: 'text', email: 'text', phone: 'text', currency: 'number', datetime: 'date', multiselect: 'select' }[def?.type] || def?.type] || OPS.text),
   ['filled', 'está preenchido'], ['empty', 'está vazio']]);
 // Cores fortes para a borda (as pastéis do quadro somem no fundo claro)
 const RING_COLORS = ['#ff4d6d', '#ff8a3d', '#f5b700', '#22c55e', '#14b8a6', '#3b82f6', '#8b5cf6', '#ec4899', '#475569'];

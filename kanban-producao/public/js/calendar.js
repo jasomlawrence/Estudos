@@ -241,7 +241,7 @@ function chip(card, time) {
     done ? h('span', { class: 'cal-chip-flag', title: 'Produção concluída' }, '✓') : null),
   show.has('column') && col ? h('div', { class: 'cal-chip-sub' }, h('span', { class: 'cal-dot', style: { background: col.color } }), col.name) : null,
   show.has('labels') && labels.length ? h('div', { class: 'cal-chip-labels' }, labels.map((l) => h('span', { class: 'cal-label', title: l.name, style: { background: l.color, color: textColorFor(l.color) } }, l.name))) : null,
-  fields.map((f) => h('div', { class: 'cal-chip-sub' }, h('span', { class: 'muted-inherit' }, `${f.name}: `), fieldText(f, card.fields[f.id]))),
+  fields.map((f) => h('div', { class: 'cal-chip-sub' }, h('span', { class: 'muted-inherit' }, `${f.name}: `), fieldText(f, card.fields[f.id], card))),
   show.has('members') && members.length ? h('div', { class: 'cal-chip-members' }, members.map((u) => avatar(u, 18))) : null);
 }
 

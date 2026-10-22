@@ -3,6 +3,7 @@ import { h, $, clear, textColorFor, fmtDateTime, fmtDuration, avatar, toLocalInp
 import { commentsPanel } from './comments.js';
 import { get, post, patch, del, api, attempt, modal, popover, confirmDialog, toast } from './api.js';
 import { openPrint } from './print.js';
+import { stoneFieldInput, meleeFieldInput } from './stock.js';
 import { state, canEdit, userById, labelById } from './state.js';
 import { activityItem } from './activity.js';
 import { openLightbox } from './lightbox.js';
@@ -233,12 +234,12 @@ function fieldsSection(card, editable) {
   if (!state.fields.length) return h('section', {}, h('h3', {}, 'Campos'), h('p', { class: 'muted' }, 'Nenhum campo personalizado. Crie em Configurações → Campos.'));
   return h('section', {},
     h('h3', {}, 'Campos'),
-    h('div', { class: 'fields-grid' }, state.fields.map((f) => h(['checklist', 'multiselect'].includes(f.type) ? 'div' : 'label', { class: `field field-${f.type}` },
+    h('div', { class: 'fields-grid' }, state.fields.map((f) => h(['checklist', 'multiselect', 'stone', 'melee'].includes(f.type) ? 'div' : 'label', { class: `field field-${f.type}` },
       h('span', { class: 'field-name' }, f.name),
-      fieldInput(f, card.fields[f.id], editable, (value) => save({ fields: { [f.id]: value } }))))));
+      fieldInput(f, card.fields[f.id], editable, (value) => save({ fields: { [f.id]: value } }), card)))));
 }
 
-function fieldInput(def, value, editable, onSave) {
+function fieldInput(def, value, editable, onSave, card) {
   const key = `field-${def.id}`;
   const common = { readOnly: !editable, disabled: !editable && ['checkbox', 'select'].includes(def.type), dataset: { key } };
   switch (def.type) {
@@ -267,6 +268,10 @@ function fieldInput(def, value, editable, onSave) {
     }
     case 'checklist':
       return checklistInput(def, value, editable, onSave);
+    case 'stone':
+      return stoneFieldInput(def, value, card, editable, onSave);
+    case 'melee':
+      return meleeFieldInput(def, value, card, editable, onSave);
     case 'url':
       return h('div', { class: 'row' }, h('input', { ...common, type: 'url', value: value ?? '', placeholder: 'https://', onchange: (e) => onSave(e.target.value) }),
         value ? h('a', { href: value, target: '_blank', rel: 'noopener', class: 'icon-btn', title: 'Abrir' }, '↗') : null);
@@ -423,7 +428,7 @@ function duplicateDialog(card) {
     h('label', { class: 'stack' }, 'Título da cópia', title),
     h('label', { class: 'stack' }, 'Colocar na coluna', column),
     h('fieldset', {}, h('legend', {}, 'O que copiar'), parts.map((p) => h('label', { class: 'check' }, p.box, ` ${p.label}`))),
-    h('p', { class: 'muted small' }, 'Comentários, histórico e o vínculo com o pedido do Shopify não são copiados.'),
+    h('p', { class: 'muted small' }, 'Comentários, histórico, o vínculo com o pedido do Shopify e as pedras do estoque não são copiados.'),
     h('div', { class: 'row end' },
       h('button', { class: 'btn', onclick: () => m.close() }, 'Cancelar'),
       h('button', { class: 'btn primary', onclick: async (e) => {
@@ -466,7 +471,7 @@ function sidebar(card, editable, col) {
     h('button', { class: 'btn block', onclick: () => { copyText(`${location.origin}/#card=${card.id}`); toast('Link copiado', 'ok'); } }, icon('link'), 'Copiar link do card'),
     editable ? h('button', { class: 'btn block', onclick: () => save({ archived: !card.archived }) }, card.archived ? [icon('restore'), 'Restaurar card'] : [icon('archive'), 'Arquivar card']) : null,
     editable ? h('button', { class: 'btn block danger', onclick: async () => {
-      if (!(await confirmDialog(`Excluir definitivamente o card "${card.title}"? Os anexos também serão apagados.`, { ok: 'Excluir' }))) return;
+      if (!(await confirmDialog(`Excluir definitivamente o card "${card.title}"? Os anexos também serão apagados.${Object.keys(card.stock || {}).length ? '\n\nAs pedras do estoque usadas neste card voltam a ficar disponíveis.' : ''}`, { ok: 'Excluir' }))) return;
       if (await attempt(() => del(`/cards/${card.id}`), 'Card excluído')) { current.modal.close(); reloadSoon(); }
     } }, icon('trash'), 'Excluir card') : null,
     h('div', { class: 'side-info muted' },

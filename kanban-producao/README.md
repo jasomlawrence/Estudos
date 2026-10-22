@@ -26,6 +26,7 @@ Quadro estilo Trello para acompanhar a produção da joalheria, conectado ao **S
 | **Google Planilhas** | Você escolhe quais campos do card viram colunas da planilha. Cada card é uma linha, atualizada automaticamente a cada mudança. Há um botão para reenviar tudo. |
 | **Tempo de produção** | Defina a coluna onde o cronômetro começa e a coluna final. Cada card mostra há quanto tempo está em produção e, ao chegar na última coluna, o tempo total. O relatório "⏱ Produção" mostra média, mediana, mais rápido/lento, % entregue no prazo e tempo médio em cada etapa. |
 | **Vários usuários + histórico** | Perfis: administrador, editor e somente leitura. Tudo o que cada pessoa faz (mover, editar campo, anexar, mudar cor…) fica registrado com nome e horário, no card e no histórico geral. As telas se atualizam sozinhas quando outra pessoa mexe. |
+| **Estoque de pedras** | Botão *Estoque* no topo. **Diamantes lab e moissanites** (uma pedra por código): fotografe o certificado (IGI, GIA…) ou a etiqueta da moissanite e os campos são preenchidos sozinhos (código, corte, peso, dimensões, cor, claridade, lapidação, polimento, simetria…); você confere e salva. O código de barras do certificado também é lido na foto. **Pedras pequenas** (por quantidade): formato + tamanho + tipo, com entradas, saídas e aviso de estoque baixo. **Baixa pelo card**: o campo *Pedra do estoque* aceita o código digitado, bipado (leitor USB) ou lido com a câmera, e a pedra fica marcada com o pedido; o campo *Pedras pequenas* desconta as quantidades. Trocar a pedra, tirar do card ou excluir o card devolve ao estoque; arquivar não devolve. Cada pedra guarda o histórico (cadastro, baixa, devolução). A busca do quadro acha o card pelo código da pedra. |
 | **Avisos de prazo** | Avisa X dias antes (ex.: 3, 1 e no dia) e quando vence: no sininho do sistema, como notificação do navegador, por e‑mail e/ou webhook (Slack, Discord, Zapier/Make → WhatsApp). Também tem um botão para mandar o aviso na hora. |
 
 ## Instalação rápida
@@ -52,6 +53,7 @@ Os dados ficam na pasta `data/` (banco SQLite + anexos). **Faça backup dessa pa
 | `PUBLIC_URL` | (vazio) | Endereço público, usado nos links dos avisos |
 | `NOTIFY_INTERVAL_MINUTES` | `10` | De quanto em quanto tempo os prazos são verificados |
 | `MAX_UPLOAD_MB` | `20` | Tamanho máximo de cada anexo |
+| `ANTHROPIC_API_KEY` | (vazio) | Leitura automática dos certificados no Estoque (também dá para colar a chave em *Estoque → ⚙*) |
 
 ## Colocando no ar (necessário para o Shopify)
 
@@ -125,6 +127,8 @@ server/
   sheets.js         sincronização com Google Planilhas
   notifications.js  avisos de prazo
   automations.js    automações (eventos e regras "passou a atender")
+  stock.js          estoque de pedras (baixa e devolução pelos campos do card)
+  certificate.js    leitura da foto do certificado (API da Anthropic)
   rules.js          condições das automações e destaques visuais
   events.js         atualização em tempo real
   db.js / auth.js   banco SQLite e login
