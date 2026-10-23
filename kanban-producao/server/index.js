@@ -80,6 +80,7 @@ if (require.main === module) {
   app.listen(PORT, () => console.log(`Kanban de produção rodando em http://localhost:${PORT}`));
   notifications.start();
   automations.start();
+  shopify.start();
 }
 
 module.exports = app;

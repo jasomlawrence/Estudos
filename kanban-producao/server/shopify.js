@@ -291,7 +291,7 @@ async function importOrderCards(order, config, userId, source, force = false) {
     return 0;
   }
   if (!isPaid(order) && !force) {
-    logOrder({ source, order, status: 'unpaid', detail: `Pagamento ${paymentLabel(order.financial_status)}. O pedido entra sozinho quando for pago.` });
+    logOrder({ source, order, status: 'unpaid', detail: `Pagamento ${paymentLabel(order.financial_status)}. O pedido entra sozinho quando for pago (o sistema confere na Shopify a cada 5 minutos).` });
     return 0;
   }
   // Tags dos produtos: o webhook não traz, então busca pela API
@@ -642,6 +642,58 @@ async function fetchOrderByName(config, name) {
   return normalizeGraphqlOrder(o, config.shop_domain);
 }
 
+async function fetchOrderById(config, id) {
+  const data = await graphql(config, `query($id: ID!) { order(id: $id) { ${ORDER_FIELDS} } }`, { id: `gid://shopify/Order/${id}` });
+  return data.order ? normalizeGraphqlOrder(data.order, config.shop_domain) : null;
+}
+
+/**
+ * Pedidos que chegaram ainda sem pagamento confirmado (PIX, boleto, cartão "autorizado"): confere de novo na Shopify
+ * e importa os que já foram pagos. Cobre o aviso "pedido pago" que não chegou (webhook não registrado ou perdido).
+ * Confere por até 7 dias depois que o pedido entrou.
+ */
+async function recheckUnpaid(config = getConfig()) {
+  if (!config.enabled || !hasApiAccess(config) || !config.board_id || !config.column_id) return 0;
+  const since = new Date(Date.now() - 7 * 864e5).toISOString();
+  const pending = q.all(`SELECT order_id FROM shopify_log l WHERE l.status = 'unpaid' AND l.received_at >= ? AND l.order_id IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM shopify_log x WHERE x.order_id = l.order_id AND x.id > l.id AND x.status IN ('created', 'exists', 'cancelled', 'ignored'))
+    GROUP BY l.order_id`, since);
+  let created = 0;
+  for (const { order_id: id } of pending) {
+    if (orderCards(id).length) continue;
+    try {
+      const order = await fetchOrderById(config, id);
+      if (!order || (!isPaid(order) && !order.cancelled_at)) continue; // continua pendente: confere na próxima rodada, sem encher o registro
+      created += await importOrder(order, config, null, { source: 'recheck' });
+    } catch (err) {
+      console.error('[shopify] reconferência do pedido', id, err.message);
+    }
+  }
+  return created;
+}
+
+/**
+ * Garante os três avisos (criado, pago, cancelado) no mesmo endereço dos que já existem,
+ * ou no endereço público do servidor (PUBLIC_URL ou o endereço do Render) quando ainda não há nenhum.
+ */
+async function ensureWebhooks(config = getConfig()) {
+  if (!config.enabled || !hasApiAccess(config)) return [];
+  const existing = await listWebhooks(config);
+  const ours = existing.find((w) => /\/webhooks\/shopify\/orders$/.test(w.uri || ''));
+  const base = String(process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+  const url = ours?.uri || (/^https:\/\//.test(base) ? `${base}/webhooks/shopify/orders` : null);
+  if (!url) return [];
+  return registerWebhook(config, url);
+}
+
+/** Roda sozinho: reconfere pagamentos a cada 5 min e os avisos da Shopify ao iniciar e a cada 12 h */
+function start() {
+  const run = (fn, label) => fn().then((r) => { if (r && (r.length || r > 0)) console.log(`[shopify] ${label}:`, r); }).catch((err) => console.error(`[shopify] ${label}:`, err.message));
+  setTimeout(() => { run(() => ensureWebhooks(), 'avisos cadastrados'); run(() => recheckUnpaid(), 'pedidos pagos depois'); }, 15000);
+  setInterval(() => run(() => recheckUnpaid(), 'pedidos pagos depois'), 5 * 60000).unref();
+  setInterval(() => run(() => ensureWebhooks(), 'avisos cadastrados'), 12 * 36e5).unref();
+}
+
 /** Webhooks que o app tem registrados na loja (para conferir se os pedidos novos vão chegar) */
 async function listWebhooks(config) {
   const data = await graphql(config, '{ webhookSubscriptions(first: 50) { nodes { id topic uri } } }');
@@ -685,5 +737,5 @@ module.exports = {
   SOURCES, getConfig, verifyHmac, normalizeRestOrder, normalizeGraphqlOrder, matchLineItem, buildCards,
   importOrder, fetchRecentOrders, registerWebhook, graphql, renderTemplate, hasApiAccess, accessToken, normalizeShopDomain, attachOrderImages, DEFAULT_API_VERSION, authorizeUrl, verifyCallback, exchangeCode,
   refreshOrderLinks, adminOrderUrl, logOrder, recentLog, fetchOrderByName, listWebhooks,
-  isPaid, archiveOrderCards, fetchStoreTags, WEBHOOK_TOPICS,
+  isPaid, archiveOrderCards, fetchStoreTags, WEBHOOK_TOPICS, fetchOrderById, recheckUnpaid, ensureWebhooks, start,
 };
