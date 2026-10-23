@@ -567,7 +567,7 @@ function orderLogSection() {
     loadBoard();
     draw();
   };
-  const SOURCE = { webhook: 'Automático', import: 'Importação', manual: 'Manual' };
+  const SOURCE = { webhook: 'Automático', import: 'Importação', manual: 'Manual', recheck: 'Pagamento conferido depois' };
   async function draw() {
     const rows = await get('/integrations/shopify/log').catch(() => []);
     clear(box, rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'log-table' },
